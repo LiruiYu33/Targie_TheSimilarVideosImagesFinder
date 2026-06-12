@@ -1,0 +1,66 @@
+name: DCO
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  check-signoff:
+    name: Check Signed-off-by
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout PR commits
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - name: Verify every commit is signed off
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+
+          # All commits introduced by this PR (excludes commits already on the base branch).
+          COMMITS=$(git rev-list "$BASE_SHA..$HEAD_SHA")
+
+          if [ -z "$COMMITS" ]; then
+            echo "No commits to check."
+            exit 0
+          fi
+
+          status=0
+          for sha in $COMMITS; do
+            subject=$(git log -1 --format=%s "$sha")
+
+            # Skip merge commits — DCO only needs to be on the underlying work.
+            if [ "$(git rev-list --parents -n 1 "$sha" | wc -w)" -gt 2 ]; then
+              echo "skip merge: $sha $subject"
+              continue
+            fi
+
+            author_name=$(git log -1 --format='%an' "$sha")
+            author_email=$(git log -1 --format='%ae' "$sha")
+            expected="Signed-off-by: ${author_name} <${author_email}>"
+
+            if git log -1 --format=%B "$sha" | grep -qiF "$expected"; then
+              echo "ok:    $sha $subject"
+            else
+              echo "MISS:  $sha $subject"
+              echo "       expected trailer: $expected"
+              status=1
+            fi
+          done
+
+          if [ "$status" -ne 0 ]; then
+            echo ""
+            echo "::error::One or more commits are missing a Signed-off-by trailer matching the commit author."
+            echo "Run 'git commit --amend --signoff' (single commit) or 'git rebase --signoff <base>' (multiple) and force-push."
+            echo "See CONTRIBUTING.md for details."
+            exit 1
+          fi
