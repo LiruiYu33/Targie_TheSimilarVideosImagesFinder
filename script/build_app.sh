@@ -14,8 +14,20 @@ export HOME="$ROOT_DIR/.build/home"
 export CLANG_MODULE_CACHE_PATH="$ROOT_DIR/.build/clang-cache"
 export SWIFTPM_MODULECACHE_OVERRIDE="$ROOT_DIR/.build/swiftpm-module-cache"
 export COPYFILE_DISABLE=1
-swift build -c release
-BUILD_BINARY="$(swift build -c release --show-bin-path)/$EXECUTABLE_NAME"
+
+# BUILD_ARCHS controls which architectures to compile.
+#   unset / empty   → host architecture only (fast, used for dev)
+#   "universal"     → arm64 + x86_64, merged with lipo
+ARCHS="${BUILD_ARCHS:-}"
+
+if [ "$ARCHS" = "universal" ]; then
+  echo "▶ Building universal binary (arm64 + x86_64)..." >&2
+  swift build -c release --arch arm64 --arch x86_64
+  BUILD_BINARY="$(swift build -c release --arch arm64 --arch x86_64 --show-bin-path)/$EXECUTABLE_NAME"
+else
+  swift build -c release
+  BUILD_BINARY="$(swift build -c release --show-bin-path)/$EXECUTABLE_NAME"
+fi
 
 rm -rf "$APP_BUNDLE"
 mkdir -p "$CONTENTS/MacOS" "$CONTENTS/Resources"
