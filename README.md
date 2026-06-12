@@ -38,3 +38,17 @@ For development, build and launch with:
 ```
 
 The app is ad-hoc signed for local use. Distribution through the internet or the App Store requires a Developer ID, notarization, and the appropriate packaging workflow.
+
+## License
+
+Targie is licensed under the **[GNU General Public License v3.0](LICENSE)**.
+
+Copyright (C) 2026 Lirui Yu.
+
+If you reuse this code (modified or not):
+
+- You **must** keep the copyright notice and credit the original author (Lirui Yu).
+- Any derivative work you distribute **must** also be released under GPL-3.0 (or a later GPL version), with full source code available to its users.
+- Closed-source / proprietary redistribution is **not** permitted.
+
+See the [LICENSE](LICENSE) file for the full legal text.
