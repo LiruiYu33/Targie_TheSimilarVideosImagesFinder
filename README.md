@@ -52,3 +52,7 @@ If you reuse this code (modified or not):
 - Closed-source / proprietary redistribution is **not** permitted.
 
 See the [LICENSE](LICENSE) file for the full legal text.
+
+## Contributing
+
+Pull requests are welcome. Every commit must be signed off under the [Developer Certificate of Origin (DCO)](DCO) — pass `-s` to `git commit`. See [CONTRIBUTING.md](CONTRIBUTING.md) for details.

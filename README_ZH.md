@@ -52,3 +52,7 @@ Copyright (C) 2026 Lirui Yu。
 - **不允许**闭源或私有化再分发。
 
 完整法律条款见 [LICENSE](LICENSE) 文件。
+
+## 贡献
+
+欢迎提交 Pull Request。每个 commit 必须按 [Developer Certificate of Origin (DCO)](DCO) 签署，即在 `git commit` 时加 `-s` 参数。详见 [CONTRIBUTING.md](CONTRIBUTING.md)。
