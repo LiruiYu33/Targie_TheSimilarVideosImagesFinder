@@ -1,0 +1,180 @@
+import AppKit
+import Foundation
+import SwiftUI
+
+enum DeletePromptStep: Equatable {
+    case choosingMethod
+    case confirmingPermanent
+}
+
+struct DeletePrompt: Identifiable, Equatable {
+    let id = UUID()
+    let video: VideoItem
+    var step: DeletePromptStep
+}
+
+enum PresentedError {
+    case deletion(DeletionError)
+    case message(String)
+
+    func localizedDescription(_ language: AppLanguage) -> String {
+        switch self {
+        case .deletion(let error): error.localizedDescription(language)
+        case .message(let message): message
+        }
+    }
+}
+
+@MainActor
+final class ScanViewModel: ObservableObject {
+    @Published var selectedFolder: URL?
+    @Published var threshold = 0.88 {
+        didSet { rebuildGroups() }
+    }
+    @Published private(set) var groups: [SimilarityGroup] = []
+    @Published var selectedGroupID: UUID?
+    @Published var selectedVideoID: UUID?
+    @Published private(set) var progress = ScanProgress()
+    @Published private(set) var issues: [ScanIssue] = []
+    @Published var presentedError: PresentedError?
+    @Published var deletePrompt: DeletePrompt?
+
+    private var allVideos: [VideoItem] = []
+    private var allRelations: [SimilarityRelation] = []
+    private var scanTask: Task<Void, Never>?
+    private let scanner: VideoScanner
+    private let pipeline: any SimilarityProcessing
+    private let deletionService: any DeletionServicing
+
+    init(
+        scanner: VideoScanner = VideoScanner(),
+        pipeline: any SimilarityProcessing = SimilarityPipeline(),
+        deletionService: any DeletionServicing = DeletionService()
+    ) {
+        self.scanner = scanner
+        self.pipeline = pipeline
+        self.deletionService = deletionService
+    }
+
+    var isScanning: Bool {
+        [.discovering, .readingMetadata, .comparing].contains(progress.stage)
+    }
+
+    var selectedGroup: SimilarityGroup? {
+        groups.first { $0.id == selectedGroupID }
+    }
+
+    var selectedVideo: VideoItem? {
+        selectedGroup?.videos.first { $0.id == selectedVideoID }
+    }
+
+    func chooseFolder(language: AppLanguage) {
+        let panel = NSOpenPanel()
+        panel.title = L10n.chooseVideoFolder(language)
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        if panel.runModal() == .OK, let url = panel.url {
+            selectedFolder = url
+            groups = []
+            selectedGroupID = nil
+            selectedVideoID = nil
+            progress = ScanProgress()
+            issues = []
+        }
+    }
+
+    func startScan() {
+        guard let folder = selectedFolder, !isScanning else { return }
+        scanTask?.cancel()
+        progress = ScanProgress(stage: .discovering)
+        groups = []
+        issues = []
+        scanTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                let scanned = try await scanner.scan(folder: folder) { [weak self] update in
+                    await MainActor.run { self?.progress = update }
+                }
+                let result = try await pipeline.process(videos: scanned.videos, threshold: threshold) { [weak self] update in
+                    await MainActor.run { self?.progress = update }
+                }
+                try Task.checkCancellation()
+                allVideos = result.videos
+                allRelations = result.relations
+                issues = scanned.issues
+                groups = result.groups
+                selectFirstAvailable()
+                progress = ScanProgress(stage: .completed, fraction: 1, discoveredCount: result.videos.count)
+            } catch is CancellationError {
+                allVideos = []
+                allRelations = []
+                groups = []
+                progress = ScanProgress(stage: .cancelled)
+            } catch {
+                groups = []
+                presentedError = .message(error.localizedDescription)
+                progress = ScanProgress(stage: .idle)
+            }
+        }
+    }
+
+    func cancelScan() {
+        scanTask?.cancel()
+    }
+
+    func selectGroup(_ id: UUID?) {
+        selectedGroupID = id
+        selectedVideoID = selectedGroup?.videos.first?.id
+    }
+
+    func requestDeletion(of video: VideoItem) {
+        deletePrompt = DeletePrompt(video: video, step: .choosingMethod)
+    }
+
+    func askForPermanentConfirmation() {
+        deletePrompt?.step = .confirmingPermanent
+    }
+
+    func confirmDeletion(of video: VideoItem, mode: DeletionMode) async {
+        do {
+            try await deletionService.delete(url: video.url, mode: mode)
+            allVideos.removeAll { $0.id == video.id }
+            allRelations.removeAll { $0.contains(video.id) }
+            rebuildGroups()
+            deletePrompt = nil
+        } catch let error as DeletionError {
+            presentedError = .deletion(error)
+        } catch {
+            presentedError = .message(error.localizedDescription)
+        }
+    }
+
+    func revealSelectedVideo() {
+        if let video = selectedVideo { deletionService.reveal(video.url) }
+    }
+
+    func openSelectedVideo() {
+        if let video = selectedVideo { deletionService.open(video.url) }
+    }
+
+    func replaceResultsForTesting(videos: [VideoItem], relations: [SimilarityRelation]) {
+        allVideos = videos
+        allRelations = relations
+        rebuildGroups()
+    }
+
+    func localizedError(_ language: AppLanguage) -> String? {
+        presentedError?.localizedDescription(language)
+    }
+
+    private func rebuildGroups() {
+        groups = SimilarityGrouper.groups(items: allVideos, relations: allRelations, threshold: threshold)
+        if !groups.contains(where: { $0.id == selectedGroupID }) { selectFirstAvailable() }
+    }
+
+    private func selectFirstAvailable() {
+        selectedGroupID = groups.first?.id
+        selectedVideoID = groups.first?.videos.first?.id
+    }
+}
