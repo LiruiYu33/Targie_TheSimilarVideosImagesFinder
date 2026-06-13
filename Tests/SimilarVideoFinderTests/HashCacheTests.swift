@@ -193,8 +193,9 @@ final class HashCacheTests: XCTestCase {
     }
 
     func testCacheRecordFromVideoItem() {
-        let video = VideoItem(
+        let video = MediaItem(
             id: UUID(),
+            kind: .video,
             url: URL(fileURLWithPath: "/tmp/foo.mp4"),
             fileSize: 1000,
             duration: 60,

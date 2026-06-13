@@ -36,7 +36,7 @@ final class ScanViewModelTests: XCTestCase {
         let relation = SimilarityRelation(firstID: a.id, secondID: b.id, score: 0.95, evidence: [.similarFrames])
         let deletion = FakeDeletionService()
         let model = ScanViewModel(deletionService: deletion)
-        model.replaceResultsForTesting(videos: [a, b], relations: [relation])
+        model.replaceResultsForTesting(items: [a, b], relations: [relation])
 
         await model.confirmDeletion(of: b, mode: .permanent)
 
