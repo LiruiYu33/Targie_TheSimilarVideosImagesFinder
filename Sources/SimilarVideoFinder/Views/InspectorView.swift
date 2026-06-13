@@ -56,7 +56,7 @@ struct InspectorView: View {
                         Button(role: .destructive) {
                             model.requestDeletion(of: media)
                         } label: {
-                            Label(L10n.deleteVideo(language), systemImage: "trash")
+                            Label(L10n.deleteMedia(language), systemImage: "trash")
                                 .frame(maxWidth: .infinity)
                         }
                         .buttonStyle(.bordered)
@@ -65,9 +65,9 @@ struct InspectorView: View {
                 }
             } else {
                 ContentUnavailableView(
-                    L10n.selectVideo(language),
-                    systemImage: "play.rectangle",
-                    description: Text(L10n.selectVideoHint(language))
+                    L10n.selectMedia(language),
+                    systemImage: "rectangle.and.hand.point.up.left",
+                    description: Text(L10n.selectMediaHint(language))
                 )
             }
         }
@@ -100,7 +100,12 @@ private struct MediaPreview: View {
                 }
             }
         }
-            .aspectRatio(16 / 9, contentMode: .fit)
+            .aspectRatio(previewAspectRatio, contentMode: .fit)
             .clipShape(RoundedRectangle(cornerRadius: 10))
+    }
+
+    private var previewAspectRatio: CGFloat {
+        guard media.kind == .image, media.width > 0, media.height > 0 else { return 16 / 9 }
+        return CGFloat(media.width) / CGFloat(media.height)
     }
 }

@@ -136,6 +136,24 @@ struct SimilarityPipeline: SimilarityProcessing {
         var processedPairs = Set<PairKey>()
         let frameFeatureCache = FrameFeatureCache(extractor: extractor)
 
+        // Exact duplicates must not depend on video frame extraction succeeding.
+        // This also keeps corrupt or partially supported files from aborting the scan.
+        for (first, second) in prehashCandidates where first.fileSize > 0 && first.fileSize == second.fileSize {
+            try Task.checkCancellation()
+            let key = PairKey(first.id, second.id)
+            guard !processedPairs.contains(key) else { continue }
+            let firstHash = try? await fileSHA256(for: first, cache: &fileHashes)
+            let secondHash = try? await fileSHA256(for: second, cache: &fileHashes)
+            guard let firstHash, firstHash == secondHash else { continue }
+            processedPairs.insert(key)
+            relations.append(SimilarityRelation(
+                firstID: first.id,
+                secondID: second.id,
+                score: 1,
+                evidence: [.identicalContentHash]
+            ))
+        }
+
         // 对每个有感知哈希的视频, 用 BK-Tree 搜索它的近邻
         let videosByID = Dictionary(uniqueKeysWithValues: videos.map { ($0.id, $0) })
         let queryVideos = videosNeedingHash

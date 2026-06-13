@@ -30,7 +30,7 @@ enum DeletePromptStep: Equatable {
 
 struct DeletePrompt: Identifiable, Equatable {
     let id = UUID()
-    let media: MediaItem
+    let media: [MediaItem]
     var step: DeletePromptStep
 }
 
@@ -59,25 +59,32 @@ final class ScanViewModel: ObservableObject {
     @Published private(set) var issues: [ScanIssue] = []
     @Published var presentedError: PresentedError?
     @Published var deletePrompt: DeletePrompt?
+    @Published var scanMode: ScanMode = .all
+    @Published var checkedMediaIDs = Set<UUID>()
 
     private var allItems: [MediaItem] = []
     private var allRelations: [SimilarityRelation] = []
     private var scanTask: Task<Void, Never>?
     private let scanner: VideoScanner
+    private let imageScanner: ImageScanner
+    private let imagePipeline: ImageSimilarityPipeline
     private let pipeline: any SimilarityProcessing
     private let deletionService: any DeletionServicing
     private let hashCache: (any HashCaching)?
 
     init(
         scanner: VideoScanner = VideoScanner(),
+        imageScanner: ImageScanner = ImageScanner(),
         pipeline: (any SimilarityProcessing)? = nil,
         deletionService: any DeletionServicing = DeletionService(),
         hashCache: (any HashCaching)? = ScanViewModel.makeDefaultHashCache()
     ) {
         self.scanner = scanner
+        self.imageScanner = imageScanner
         self.deletionService = deletionService
         self.hashCache = hashCache
         self.pipeline = pipeline ?? SimilarityPipeline(cache: hashCache)
+        self.imagePipeline = ImageSimilarityPipeline(cache: hashCache)
     }
 
     private static func makeDefaultHashCache() -> (any HashCaching)? {
@@ -107,6 +114,7 @@ final class ScanViewModel: ObservableObject {
             groups = []
             selectedGroupID = nil
             selectedMediaID = nil
+            checkedMediaIDs = []
             progress = ScanProgress()
             issues = []
         }
@@ -117,27 +125,40 @@ final class ScanViewModel: ObservableObject {
         scanTask?.cancel()
         progress = ScanProgress(stage: .discovering)
         groups = []
+        checkedMediaIDs = []
         issues = []
         scanTask = Task { [weak self] in
             guard let self else { return }
             do {
-                let scanned = try await scanner.scan(folder: folder) { [weak self] update in
-                    await MainActor.run { self?.progress = update }
+                var items: [MediaItem] = []
+                var relations: [SimilarityRelation] = []
+                var scanIssues: [ScanIssue] = []
+                if scanMode != .images {
+                    let scanned = try await scanner.scan(folder: folder) { [weak self] update in await MainActor.run { self?.progress = update } }
+                    scanIssues.append(contentsOf: scanned.issues)
+                    issues = scanIssues
+                    let result = try await pipeline.process(videos: scanned.videos, threshold: threshold) { [weak self] update in await MainActor.run { self?.progress = update } }
+                    items.append(contentsOf: result.videos)
+                    relations.append(contentsOf: result.relations)
                 }
-                issues = scanned.issues
-                let result = try await pipeline.process(videos: scanned.videos, threshold: threshold) { [weak self] update in
-                    await MainActor.run { self?.progress = update }
+                if scanMode != .videos {
+                    let scanned = try await imageScanner.scan(folder: folder) { [weak self] update in await MainActor.run { self?.progress = update } }
+                    scanIssues.append(contentsOf: scanned.issues)
+                    issues = scanIssues
+                    let result = try await imagePipeline.process(images: scanned.images, threshold: threshold) { [weak self] update in await MainActor.run { self?.progress = update } }
+                    items.append(contentsOf: result.images)
+                    relations.append(contentsOf: result.relations)
                 }
                 try Task.checkCancellation()
-                allItems = result.videos
-                allRelations = result.relations
-                groups = result.groups
+                allItems = items
+                allRelations = relations
+                groups = SimilarityGrouper.groups(items: items, relations: relations, threshold: threshold)
                 selectFirstAvailable()
-                progress = ScanProgress(stage: .completed, fraction: 1, discoveredCount: result.videos.count)
+                progress = ScanProgress(stage: .completed, fraction: 1, discoveredCount: items.count)
 
                 // 清理缓存中已不存在的视频条目
                 if let hashCache {
-                    let validPaths = Set(result.videos.map { $0.url.path })
+                    let validPaths = Set(items.map { $0.url.path })
                     Task { await hashCache.pruneStale(validPaths: validPaths) }
                 }
             } catch is CancellationError {
@@ -157,13 +178,36 @@ final class ScanViewModel: ObservableObject {
         scanTask?.cancel()
     }
 
+    func setScanMode(_ mode: ScanMode) {
+        guard scanMode != mode else { return }
+        scanTask?.cancel()
+        scanMode = mode
+        allItems = []
+        allRelations = []
+        groups = []
+        selectedGroupID = nil
+        selectedMediaID = nil
+        checkedMediaIDs = []
+        issues = []
+        progress = ScanProgress()
+    }
+
     func selectGroup(_ id: UUID?) {
         selectedGroupID = id
         selectedMediaID = selectedGroup?.items.first?.id
     }
 
     func requestDeletion(of media: MediaItem) {
-        deletePrompt = DeletePrompt(media: media, step: .choosingMethod)
+        deletePrompt = DeletePrompt(media: [media], step: .choosingMethod)
+    }
+
+    func requestCheckedDeletion() {
+        let selected = allItems.filter { checkedMediaIDs.contains($0.id) }
+        if !selected.isEmpty { deletePrompt = DeletePrompt(media: selected, step: .choosingMethod) }
+    }
+
+    func toggleChecked(_ id: UUID) {
+        if checkedMediaIDs.contains(id) { checkedMediaIDs.remove(id) } else { checkedMediaIDs.insert(id) }
     }
 
     func askForPermanentConfirmation() {
@@ -171,17 +215,24 @@ final class ScanViewModel: ObservableObject {
     }
 
     func confirmDeletion(of media: MediaItem, mode: DeletionMode) async {
-        do {
-            try await deletionService.delete(url: media.url, mode: mode)
-            allItems.removeAll { $0.id == media.id }
-            allRelations.removeAll { $0.contains(media.id) }
-            rebuildGroups()
-            deletePrompt = nil
-        } catch let error as DeletionError {
-            presentedError = .deletion(error)
-        } catch {
-            presentedError = .message(error.localizedDescription)
+        deletePrompt = DeletePrompt(media: [media], step: deletePrompt?.step ?? .choosingMethod)
+        await confirmPromptDeletion(mode: mode)
+    }
+
+    func confirmPromptDeletion(mode: DeletionMode) async {
+        guard let targets = deletePrompt?.media else { return }
+        var failures: [String] = []
+        for media in targets {
+            do {
+                try await deletionService.delete(url: media.url, mode: mode)
+                allItems.removeAll { $0.id == media.id }
+                allRelations.removeAll { $0.contains(media.id) }
+                checkedMediaIDs.remove(media.id)
+            } catch { failures.append("\(media.filename): \(error.localizedDescription)") }
         }
+        rebuildGroups()
+        deletePrompt = nil
+        if !failures.isEmpty { presentedError = .message(failures.joined(separator: "\n")) }
     }
 
     func revealSelectedMedia() {
@@ -204,6 +255,7 @@ final class ScanViewModel: ObservableObject {
 
     private func rebuildGroups() {
         groups = SimilarityGrouper.groups(items: allItems, relations: allRelations, threshold: threshold)
+        checkedMediaIDs.formIntersection(Set(allItems.map(\.id)))
         if !groups.contains(where: { $0.id == selectedGroupID }) { selectFirstAvailable() }
     }
 

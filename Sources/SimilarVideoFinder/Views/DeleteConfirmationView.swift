@@ -35,8 +35,8 @@ struct DeleteConfirmationView: View {
 
                 Text(prompt.step == .choosingMethod ? L10n.deleteHow(language) : L10n.permanentWarningTitle(language))
                     .font(.title2.bold())
-                Text(prompt.media.filename).font(.headline)
-                Text(prompt.media.url.path)
+                Text(L10n.selectedCount(prompt.media.count, language)).font(.headline)
+                Text(prompt.media.map { $0.url.path }.joined(separator: "\n"))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .textSelection(.enabled)
@@ -51,7 +51,7 @@ struct DeleteConfirmationView: View {
                         Button(L10n.permanentDelete(language)) { model.askForPermanentConfirmation() }
                         Button(L10n.moveToTrash(language)) {
                             Task {
-                                await model.confirmDeletion(of: prompt.media, mode: .trash)
+                                await model.confirmPromptDeletion(mode: .trash)
                                 if model.deletePrompt == nil { dismiss() }
                             }
                         }
@@ -68,7 +68,7 @@ struct DeleteConfirmationView: View {
                         }
                         Button(L10n.confirmPermanent(language), role: .destructive) {
                             Task {
-                                await model.confirmDeletion(of: prompt.media, mode: .permanent)
+                                await model.confirmPromptDeletion(mode: .permanent)
                                 if model.deletePrompt == nil { dismiss() }
                             }
                         }
