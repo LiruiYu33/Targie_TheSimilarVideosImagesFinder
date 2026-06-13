@@ -46,13 +46,17 @@ protocol SimilarityProcessing: Sendable {
 /// - BK-Tree 搜索 O(n·log n), 替代 O(n²) 全比较
 /// - Vision FeaturePrint 仅作精确认证层, 调用次数大幅减少
 struct SimilarityPipeline: SimilarityProcessing {
-    private let extractor = FrameFeatureExtractor()
+    private let extractor: any FrameFeatureExtracting
     private let cache: (any HashCaching)?
     /// 感知哈希之间被视为"潜在相似"的最大 Hamming 距离 (64-bit 哈希中允许多达 24 bits 不同)
     static let perceptualMaxDistance = 24
 
-    init(cache: (any HashCaching)? = nil) {
+    init(
+        cache: (any HashCaching)? = nil,
+        extractor: any FrameFeatureExtracting = FrameFeatureExtractor()
+    ) {
         self.cache = cache
+        self.extractor = extractor
     }
 
     func process(
@@ -73,7 +77,10 @@ struct SimilarityPipeline: SimilarityProcessing {
         }
 
         // 通过 QuickPrehash 筛选候选对
-        let prehashCandidates = candidatesByPrehash(videos: videos, prehashes: prehashes)
+        let prehashCandidates = PrehashCandidateFinder.find(
+            videos: videos,
+            prehashes: prehashes
+        ).pairs
 
         await progress(ScanProgress(
             stage: .prehashing,
@@ -120,6 +127,7 @@ struct SimilarityPipeline: SimilarityProcessing {
         var relations: [SimilarityRelation] = []
         var fileHashes: [UUID: String] = [:]
         var processedPairs = Set<PairKey>()
+        let frameFeatureCache = FrameFeatureCache(extractor: extractor)
 
         // 对每个有感知哈希的视频, 用 BK-Tree 搜索它的近邻
         let videosByID = Dictionary(uniqueKeysWithValues: videos.map { ($0.id, $0) })
@@ -163,7 +171,10 @@ struct SimilarityPipeline: SimilarityProcessing {
                 if hashMatch || percSimilarity >= 0.92 {
                     frameScore = nil
                 } else {
-                    frameScore = try? await extractor.similarity(between: video.url, and: other.url)
+                    frameScore = try? await frameFeatureCache.similarity(
+                        between: video.url,
+                        and: other.url
+                    )
                 }
 
                 let score = SimilarityScorer.score(
@@ -197,45 +208,6 @@ struct SimilarityPipeline: SimilarityProcessing {
             relations: relations,
             groups: SimilarityGrouper.groups(items: videos, relations: relations, threshold: threshold)
         )
-    }
-
-    // MARK: - Phase A helpers
-
-    /// 利用 QuickPrehash 生成"潜在相似"的候选对。
-    /// 通过 (durationBucket, sizeBucket, aspectBucket) 三维分桶, 仅在相邻桶内做 isCompatible 检查。
-    private func candidatesByPrehash(
-        videos: [VideoItem],
-        prehashes: [UUID: QuickPrehash]
-    ) -> [(VideoItem, VideoItem)] {
-        guard videos.count > 1 else { return [] }
-        var result: [(VideoItem, VideoItem)] = []
-        for i in 0..<(videos.count - 1) {
-            for j in (i + 1)..<videos.count {
-                let first = videos[i]
-                let second = videos[j]
-                guard let firstPre = prehashes[first.id],
-                      let secondPre = prehashes[second.id]
-                else { continue }
-                if isLikelyCandidate(first: first, second: second, firstPre: firstPre, secondPre: secondPre) {
-                    result.append((first, second))
-                }
-            }
-        }
-        return result
-    }
-
-    /// 候选判定: QuickPrehash 兼容 OR 文件名标准化匹配 (后者用于跨编码相同源)。
-    private func isLikelyCandidate(
-        first: VideoItem,
-        second: VideoItem,
-        firstPre: QuickPrehash,
-        secondPre: QuickPrehash
-    ) -> Bool {
-        if firstPre.isCompatible(with: secondPre) { return true }
-        // 文件名标准化匹配是一个独立信号 — 即使 prehash 不兼容也保留为候选
-        let n1 = FilenameNormalizer.normalize(first.filename)
-        let n2 = FilenameNormalizer.normalize(second.filename)
-        return !n1.isEmpty && n1 == n2
     }
 
     /// 从候选对中提取所有需要计算感知哈希的视频 (去重)。
