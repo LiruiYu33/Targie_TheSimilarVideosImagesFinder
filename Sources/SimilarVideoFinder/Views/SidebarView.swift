@@ -102,7 +102,7 @@ struct SidebarView: View {
                 Slider(value: $model.threshold, in: ScanViewModel.displayThresholdRange, step: 0.01) {
                     EmptyView()
                 } minimumValueLabel: {
-                    Text("50%").font(.system(size: 9)).foregroundStyle(.tertiary)
+                    Text("60%").font(.system(size: 9)).foregroundStyle(.tertiary)
                 } maximumValueLabel: {
                     Text("100%").font(.system(size: 9)).foregroundStyle(.tertiary)
                 }

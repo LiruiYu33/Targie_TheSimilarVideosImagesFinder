@@ -27,10 +27,11 @@ struct ImageSimilarityPipeline: Sendable {
     ) async throws -> ImagePipelineResult {
         let images = images.filter { $0.kind == .image }
         await progress(ScanProgress(stage: .hashing, fraction: 0, discoveredCount: images.count))
-        let hashes = await computeHashes(images: images, progress: progress)
+        let hashes = try await computeHashes(images: images, progress: progress)
         var tree = BKTree<ImagePerceptualHash>()
         for hash in hashes.values { tree.insert(hash) { $0.hammingDistance(to: $1) } }
 
+        try Task.checkCancellation()
         await progress(ScanProgress(stage: .comparing, fraction: 0, discoveredCount: images.count))
         let byID = Dictionary(uniqueKeysWithValues: images.map { ($0.id, $0) })
         let featureCache = ImageFeatureCache(extractor: featureExtractor)
@@ -49,11 +50,12 @@ struct ImageSimilarityPipeline: Sendable {
                    let secondHash = try? await FileHasher.sha256(of: other.url) {
                     exact = firstHash == secondHash
                 }
+                try Task.checkCancellation()
                 let feature = !exact && perceptual >= 0.72
                     ? await featureCache.similarity(between: image.url, and: other.url)
                     : nil
                 let score = SimilarityScorer.score(image, other, hashesMatch: exact, perceptualSimilarity: perceptual, frameSimilarity: feature)
-                if score.score >= 0.50 {
+                if score.score >= 0.60 {
                     relations.append(SimilarityRelation(firstID: image.id, secondID: other.id, score: score.score, evidence: score.evidence))
                 }
             }
@@ -62,7 +64,7 @@ struct ImageSimilarityPipeline: Sendable {
         return ImagePipelineResult(images: images, relations: relations, groups: SimilarityGrouper.groups(items: images, relations: relations, threshold: threshold))
     }
 
-    private func computeHashes(images: [MediaItem], progress: @escaping @Sendable (ScanProgress) async -> Void) async -> [UUID: ImagePerceptualHash] {
+    private func computeHashes(images: [MediaItem], progress: @escaping @Sendable (ScanProgress) async -> Void) async throws -> [UUID: ImagePerceptualHash] {
         var hashes: [UUID: ImagePerceptualHash] = [:]
         var missing: [MediaItem] = []
         for image in images {
@@ -70,13 +72,13 @@ struct ImageSimilarityPipeline: Sendable {
                 hashes[image.id] = ImagePerceptualHash(mediaID: image.id, hashBits: Array(record.perceptualHash))
             } else { missing.append(image) }
         }
-        await withTaskGroup(of: (MediaItem, ImagePerceptualHash?).self) { group in
+        try await withThrowingTaskGroup(of: (MediaItem, ImagePerceptualHash?).self) { group in
             var iterator = missing.makeIterator()
             for _ in 0..<min(4, missing.count) {
                 if let item = iterator.next() { group.addTask { (item, try? ImagePerceptualHasher.hash(for: item.url, id: item.id)) } }
             }
             var completed = hashes.count
-            while let (item, hash) = await group.next() {
+            while let (item, hash) = try await group.next() {
                 completed += 1
                 if let hash {
                     hashes[item.id] = hash

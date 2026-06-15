@@ -63,10 +63,11 @@ struct ImageScanner: Sendable {
 
             for _ in 0..<min(limit, urls.count) {
                 guard let next = iterator.next() else { break }
-                group.addTask { await Self.load(index: next.offset, url: next.element, using: loader) }
+                group.addTask { try await Self.load(index: next.offset, url: next.element, using: loader) }
             }
 
             while let result = try await group.next() {
+                try Task.checkCancellation()
                 collected.append(result)
                 completed += 1
                 await progress(ScanProgress(
@@ -76,7 +77,7 @@ struct ImageScanner: Sendable {
                     discoveredCount: urls.count
                 ))
                 if let next = iterator.next() {
-                    group.addTask { await Self.load(index: next.offset, url: next.element, using: loader) }
+                    group.addTask { try await Self.load(index: next.offset, url: next.element, using: loader) }
                 }
             }
             return collected.sorted { $0.index < $1.index }
@@ -88,9 +89,11 @@ struct ImageScanner: Sendable {
         )
     }
 
-    private static func load(index: Int, url: URL, using loader: ImageLoader) async -> LoadedImage {
+    private static func load(index: Int, url: URL, using loader: ImageLoader) async throws -> LoadedImage {
         do {
             return LoadedImage(index: index, url: url, image: try await loader(url), issue: nil)
+        } catch is CancellationError {
+            throw CancellationError()
         } catch {
             return LoadedImage(
                 index: index,

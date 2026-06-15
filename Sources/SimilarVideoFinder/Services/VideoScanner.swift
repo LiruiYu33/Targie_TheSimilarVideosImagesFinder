@@ -79,10 +79,11 @@ struct VideoScanner {
 
             for _ in 0..<min(limit, urls.count) {
                 guard let next = iterator.next() else { break }
-                group.addTask { await Self.load(index: next.offset, url: next.element, using: loader) }
+                group.addTask { try await Self.load(index: next.offset, url: next.element, using: loader) }
             }
 
             while let result = try await group.next() {
+                try Task.checkCancellation()
                 collected.append(result)
                 completed += 1
                 await progress(ScanProgress(
@@ -92,7 +93,7 @@ struct VideoScanner {
                     discoveredCount: urls.count
                 ))
                 if let next = iterator.next() {
-                    group.addTask { await Self.load(index: next.offset, url: next.element, using: loader) }
+                    group.addTask { try await Self.load(index: next.offset, url: next.element, using: loader) }
                 }
             }
             return collected.sorted { $0.index < $1.index }
@@ -104,9 +105,11 @@ struct VideoScanner {
         )
     }
 
-    private static func load(index: Int, url: URL, using loader: VideoLoader) async -> LoadedVideo {
+    private static func load(index: Int, url: URL, using loader: VideoLoader) async throws -> LoadedVideo {
         do {
             return LoadedVideo(index: index, url: url, video: try await loader(url), issue: nil)
+        } catch is CancellationError {
+            throw CancellationError()
         } catch ScannerError.noVideoTrack {
             return LoadedVideo(index: index, url: url, video: nil, issue: ScanIssue(url: url, reason: .noVideoTrack))
         } catch {
@@ -115,12 +118,15 @@ struct VideoScanner {
     }
 
     private static func loadVideo(at url: URL, thumbnailStore: ThumbnailStore) async throws -> MediaItem {
+        try Task.checkCancellation()
         let values = try url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
         let asset = AVURLAsset(url: url)
         let duration = try await asset.load(.duration).seconds
+        try Task.checkCancellation()
         let tracks = try await asset.loadTracks(withMediaType: .video)
         guard let track = tracks.first else { throw ScannerError.noVideoTrack }
         let naturalSize = try await track.load(.naturalSize)
+        try Task.checkCancellation()
         let transform = try await track.load(.preferredTransform)
         let transformed = naturalSize.applying(transform)
         let width = Int(abs(transformed.width).rounded())

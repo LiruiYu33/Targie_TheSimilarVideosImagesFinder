@@ -209,7 +209,7 @@ struct SimilarityPipeline: SimilarityProcessing {
                     frameSimilarity: frameScore
                 )
 
-                if score.score >= min(threshold, 0.50) {
+                if score.score >= min(threshold, 0.60) {
                     relations.append(SimilarityRelation(
                         firstID: video.id,
                         secondID: other.id,
@@ -291,7 +291,7 @@ struct SimilarityPipeline: SimilarityProcessing {
 
             while inFlight < concurrencyCap, let next = iterator.next() {
                 group.addTask {
-                    let hash = try? await PerceptualHasher.hash(for: next.url, id: next.id)
+                    let hash = try await PerceptualHasher.hash(for: next.url, id: next.id)
                     return (next.id, hash)
                 }
                 inFlight += 1
@@ -312,7 +312,7 @@ struct SimilarityPipeline: SimilarityProcessing {
 
                 if let next = iterator.next() {
                     group.addTask {
-                        let hash = try? await PerceptualHasher.hash(for: next.url, id: next.id)
+                        let hash = try await PerceptualHasher.hash(for: next.url, id: next.id)
                         return (next.id, hash)
                     }
                 }
