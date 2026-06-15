@@ -176,6 +176,16 @@ final class HashCacheTests: XCTestCase {
         XCTAssertEqual(finalCount, 0)
     }
 
+    func testPruneStaleHandlesMorePathsThanSQLiteVariableLimit() async {
+        await cache.upsert(makeRecord(path: "/tmp/stale.mp4", size: 1, date: nil))
+        let validPaths = Set((0..<300_000).map { "/media/library/video-\($0).mp4" })
+
+        await cache.pruneStale(validPaths: validPaths)
+
+        let remainingCount = await cache.count()
+        XCTAssertEqual(remainingCount, 0)
+    }
+
     // MARK: - Persistence Across Instances
 
     func testCachePersistsAcrossDatabaseConnections() async throws {

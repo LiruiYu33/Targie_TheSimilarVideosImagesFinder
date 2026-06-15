@@ -124,6 +124,8 @@ final class ScanViewModel: ObservableObject {
         guard let folder = selectedFolder, !isScanning else { return }
         scanTask?.cancel()
         progress = ScanProgress(stage: .discovering)
+        allItems = []
+        allRelations = []
         groups = []
         checkedMediaIDs = []
         issues = []
@@ -140,6 +142,7 @@ final class ScanViewModel: ObservableObject {
                     let result = try await pipeline.process(videos: scanned.videos, threshold: threshold) { [weak self] update in await MainActor.run { self?.progress = update } }
                     items.append(contentsOf: result.videos)
                     relations.append(contentsOf: result.relations)
+                    publish(items: items, relations: relations)
                 }
                 if scanMode != .videos {
                     let scanned = try await imageScanner.scan(folder: folder) { [weak self] update in await MainActor.run { self?.progress = update } }
@@ -148,6 +151,7 @@ final class ScanViewModel: ObservableObject {
                     let result = try await imagePipeline.process(images: scanned.images, threshold: threshold) { [weak self] update in await MainActor.run { self?.progress = update } }
                     items.append(contentsOf: result.images)
                     relations.append(contentsOf: result.relations)
+                    publish(items: items, relations: relations)
                 }
                 try Task.checkCancellation()
                 allItems = items
@@ -162,9 +166,6 @@ final class ScanViewModel: ObservableObject {
                     Task { await hashCache.pruneStale(validPaths: validPaths) }
                 }
             } catch is CancellationError {
-                allItems = []
-                allRelations = []
-                groups = []
                 progress = ScanProgress(stage: .cancelled)
             } catch {
                 groups = []
@@ -257,6 +258,13 @@ final class ScanViewModel: ObservableObject {
         groups = SimilarityGrouper.groups(items: allItems, relations: allRelations, threshold: threshold)
         checkedMediaIDs.formIntersection(Set(allItems.map(\.id)))
         if !groups.contains(where: { $0.id == selectedGroupID }) { selectFirstAvailable() }
+    }
+
+    private func publish(items: [MediaItem], relations: [SimilarityRelation]) {
+        allItems = items
+        allRelations = relations
+        groups = SimilarityGrouper.groups(items: items, relations: relations, threshold: threshold)
+        selectFirstAvailable()
     }
 
     private func selectFirstAvailable() {

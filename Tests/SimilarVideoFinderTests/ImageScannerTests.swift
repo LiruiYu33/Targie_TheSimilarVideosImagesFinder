@@ -27,13 +27,31 @@ final class ImageScannerTests: XCTestCase {
         XCTAssertEqual(found.map(\.lastPathComponent), ["a.jpeg", "b.png", "c.heic", "d.webp", "e.tif", "f.tiff", "g.gif", "h.bmp", "i.PNG", "z.JPG"])
     }
 
+    func testDiscoveryIgnoresDirectoriesWithImageExtensions() throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(
+            at: root.appendingPathComponent("not-an-image.jpg"),
+            withIntermediateDirectories: true
+        )
+        FileManager.default.createFile(
+            atPath: root.appendingPathComponent("real.jpg").path,
+            contents: Data()
+        )
+
+        let found = try ImageScanner.discoverImageURLs(in: root)
+
+        XCTAssertEqual(found.map(\.lastPathComponent), ["real.jpg"])
+    }
+
     func testLoadsPNGDimensionsAndThumbnail() async throws {
         let root = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
         let url = root.appendingPathComponent("sample.png")
         try writePNG(width: 40, height: 20, to: url)
 
-        let result = try await ImageScanner().scan(folder: root) { _ in }
+        let thumbnailStore = ThumbnailStore(directoryURL: root.appendingPathComponent("thumbnail-cache"))
+        let result = try await ImageScanner(thumbnailStore: thumbnailStore).scan(folder: root) { _ in }
 
         XCTAssertTrue(result.issues.isEmpty)
         XCTAssertEqual(result.images.count, 1)
@@ -42,6 +60,7 @@ final class ImageScannerTests: XCTestCase {
         XCTAssertEqual(result.images[0].width, 40)
         XCTAssertEqual(result.images[0].height, 20)
         XCTAssertNotNil(result.images[0].thumbnailData)
+        XCTAssertTrue(result.images[0].isThumbnailDiskBacked)
     }
 
     func testOneUnreadableImageDoesNotAbortOtherLoads() async throws {
