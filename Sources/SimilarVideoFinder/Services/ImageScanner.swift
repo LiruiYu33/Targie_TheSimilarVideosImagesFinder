@@ -22,10 +22,11 @@ struct ImageScanner: Sendable {
 
     init(
         maxConcurrentLoads: Int = min(4, max(2, ProcessInfo.processInfo.activeProcessorCount / 2)),
+        thumbnailStore: ThumbnailStore = .shared,
         loader: ImageLoader? = nil
     ) {
         self.maxConcurrentLoads = max(1, maxConcurrentLoads)
-        self.loader = loader ?? { url in try Self.loadImage(at: url) }
+        self.loader = loader ?? { url in try Self.loadImage(at: url, thumbnailStore: thumbnailStore) }
     }
 
     static func discoverImageURLs(in folder: URL) throws -> [URL] {
@@ -40,6 +41,7 @@ struct ImageScanner: Sendable {
 
         return enumerator.compactMap { element -> URL? in
             guard let url = element as? URL,
+                  (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true,
                   supportedExtensions.contains(url.pathExtension.lowercased()) else { return nil }
             return url
         }.sorted { $0.path.localizedStandardCompare($1.path) == .orderedAscending }
@@ -99,7 +101,7 @@ struct ImageScanner: Sendable {
         }
     }
 
-    private static func loadImage(at url: URL) throws -> MediaItem {
+    private static func loadImage(at url: URL, thumbnailStore: ThumbnailStore) throws -> MediaItem {
         let values = try url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
         guard let source = CGImageSourceCreateWithURL(url as CFURL, [
             kCGImageSourceShouldCache: false
@@ -126,6 +128,9 @@ struct ImageScanner: Sendable {
         }
         let representation = NSBitmapImageRep(cgImage: thumbnail)
         let thumbnailData = representation.representation(using: .jpeg, properties: [.compressionFactor: 0.78])
+        let thumbnailURL = thumbnailData.flatMap {
+            try? thumbnailStore.persist($0, sourceURL: url, modifiedAt: values.contentModificationDate)
+        }
 
         return MediaItem(
             kind: .image,
@@ -135,7 +140,8 @@ struct ImageScanner: Sendable {
             width: width,
             height: height,
             modifiedAt: values.contentModificationDate,
-            thumbnailData: thumbnailData
+            thumbnailData: thumbnailURL == nil ? thumbnailData : nil,
+            thumbnailURL: thumbnailURL
         )
     }
 }

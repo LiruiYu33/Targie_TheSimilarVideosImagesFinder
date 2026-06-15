@@ -38,6 +38,21 @@ final class VideoScannerTests: XCTestCase {
         XCTAssertEqual(found.map(\.lastPathComponent), ["b.mov", "a.mp4", "c.M4V"])
     }
 
+    func testDiscoveryIgnoresDirectoriesWithVideoExtensions() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(
+            at: root.appendingPathComponent("not-a-video.mp4"),
+            withIntermediateDirectories: true
+        )
+        try Data().write(to: root.appendingPathComponent("real.mp4"))
+
+        let found = try VideoScanner.discoverVideoURLs(in: root)
+
+        XCTAssertEqual(found.map(\.lastPathComponent), ["real.mp4"])
+    }
+
     func testScanLoadsMetadataConcurrentlyAndKeepsStableOrder() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)

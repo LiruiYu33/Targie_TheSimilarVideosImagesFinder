@@ -78,6 +78,92 @@ final class ScanViewModelTests: XCTestCase {
         XCTAssertEqual(model.checkedMediaIDs, [second.id])
         XCTAssertNotNil(model.presentedError)
     }
+
+    func testCancellingImageStageKeepsCompletedVideoGroups() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ScanCancellation-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        for name in ["first.mp4", "second.mp4", "image.jpg"] {
+            try Data().write(to: root.appendingPathComponent(name))
+        }
+
+        let videoScanner = VideoScanner(maxConcurrentLoads: 2) { url in
+            MediaItem(
+                kind: .video,
+                url: url,
+                fileSize: 1,
+                duration: 1,
+                width: 16,
+                height: 9,
+                modifiedAt: nil,
+                thumbnailData: nil
+            )
+        }
+        let imageScanner = ImageScanner(maxConcurrentLoads: 1) { url in
+            try await Task.sleep(for: .seconds(10))
+            return MediaItem(
+                kind: .image,
+                url: url,
+                fileSize: 1,
+                duration: nil,
+                width: 1,
+                height: 1,
+                modifiedAt: nil,
+                thumbnailData: nil
+            )
+        }
+        let model = ScanViewModel(
+            scanner: videoScanner,
+            imageScanner: imageScanner,
+            pipeline: ExactDuplicatePipeline(),
+            hashCache: nil
+        )
+        model.selectedFolder = root
+
+        model.startScan()
+        try await waitUntil { model.groups.count == 1 && model.progress.stage == .readingMetadata }
+        model.cancelScan()
+        try await waitUntil { model.progress.stage == .cancelled }
+
+        XCTAssertEqual(model.groups.count, 1)
+        XCTAssertEqual(model.groups[0].kind, .video)
+        XCTAssertEqual(model.groups[0].items.count, 2)
+    }
+
+    private func waitUntil(
+        timeoutIterations: Int = 200,
+        condition: () -> Bool
+    ) async throws {
+        for _ in 0..<timeoutIterations {
+            if condition() { return }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTFail("Timed out waiting for scan state")
+    }
+}
+
+private struct ExactDuplicatePipeline: SimilarityProcessing {
+    func process(
+        videos: [MediaItem],
+        threshold: Double,
+        progress: @escaping @Sendable (ScanProgress) async -> Void
+    ) async throws -> PipelineResult {
+        guard videos.count == 2 else {
+            return PipelineResult(videos: videos, relations: [], groups: [])
+        }
+        let relation = SimilarityRelation(
+            firstID: videos[0].id,
+            secondID: videos[1].id,
+            score: 1,
+            evidence: [.identicalContentHash]
+        )
+        return PipelineResult(
+            videos: videos,
+            relations: [relation],
+            groups: SimilarityGrouper.groups(items: videos, relations: [relation], threshold: threshold)
+        )
+    }
 }
 
 @MainActor

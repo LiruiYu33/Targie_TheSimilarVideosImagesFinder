@@ -51,7 +51,8 @@ struct MediaItem: Identifiable, Hashable, Sendable {
     let width: Int
     let height: Int
     let modifiedAt: Date?
-    let thumbnailData: Data?
+    private let embeddedThumbnailData: Data?
+    let thumbnailURL: URL?
 
     init(
         id: UUID = UUID(),
@@ -62,7 +63,8 @@ struct MediaItem: Identifiable, Hashable, Sendable {
         width: Int,
         height: Int,
         modifiedAt: Date?,
-        thumbnailData: Data?
+        thumbnailData: Data?,
+        thumbnailURL: URL? = nil
     ) {
         self.id = id
         self.kind = kind
@@ -72,10 +74,15 @@ struct MediaItem: Identifiable, Hashable, Sendable {
         self.width = width
         self.height = height
         self.modifiedAt = modifiedAt
-        self.thumbnailData = thumbnailData
+        self.embeddedThumbnailData = thumbnailData
+        self.thumbnailURL = thumbnailURL
     }
 
     var filename: String { url.lastPathComponent }
+    var thumbnailData: Data? {
+        embeddedThumbnailData ?? thumbnailURL.flatMap(ThumbnailStore.data(at:))
+    }
+    var isThumbnailDiskBacked: Bool { embeddedThumbnailData == nil && thumbnailURL != nil }
 
     func resolution(language: AppLanguage = .defaultLanguage) -> String {
         width > 0 && height > 0 ? "\(width) × \(height)" : L10n.unknown(language)

@@ -141,9 +141,15 @@ enum PerceptualHasher {
         let bytesPerPixel = 4
         let bytesPerRow = width * bytesPerPixel
 
-        var buffer = [UInt8](repeating: 0, count: height * bytesPerRow)
+        let byteCount = height * bytesPerRow
+        let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: byteCount)
+        buffer.initialize(repeating: 0, count: byteCount)
+        defer {
+            buffer.deinitialize(count: byteCount)
+            buffer.deallocate()
+        }
         guard let context = CGContext(
-            data: &buffer,
+            data: buffer,
             width: width,
             height: height,
             bitsPerComponent: 8,

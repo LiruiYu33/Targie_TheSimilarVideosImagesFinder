@@ -109,14 +109,12 @@ actor HashCache: HashCaching {
 
     func pruneStale(validPaths: Set<String>) {
         try? dbQueue.write { db in
-            // 删除所有不在 validPaths 中的记录
-            let validList = Array(validPaths)
-            if validList.isEmpty {
-                _ = try CacheRecord.deleteAll(db)
-            } else {
-                let placeholders = validList.map { _ in "?" }.joined(separator: ",")
-                let sql = "DELETE FROM hash_cache WHERE filePath NOT IN (\(placeholders))"
-                try db.execute(sql: sql, arguments: StatementArguments(validList))
+            let cachedPaths = try String.fetchAll(db, sql: "SELECT filePath FROM hash_cache")
+            for stalePath in cachedPaths where !validPaths.contains(stalePath) {
+                try db.execute(
+                    sql: "DELETE FROM hash_cache WHERE filePath = ?",
+                    arguments: [stalePath]
+                )
             }
         }
     }
