@@ -27,12 +27,20 @@ struct BrowseView: View {
     @Environment(\.appLanguage) private var language
 
     var body: some View {
+        // Three-column NavigationSplitView with a hidden sidebar so the
+        // content column fills from the left window edge natively.
+        // NavigationSplitView properly fills the window on launch
+        // (unlike HSplitView which needs a state change to snap).
         NavigationSplitView {
+            Color.clear
+                .frame(width: 0)
+                .navigationSplitViewColumnWidth(min: 0, ideal: 0, max: 0)
+        } content: {
             BrowseTableView(browseModel: browseModel)
-                .navigationSplitViewColumnWidth(min: 500, ideal: 800)
+                .navigationSplitViewColumnWidth(min: 400, ideal: 700)
         } detail: {
             BrowsePreviewPanel(browseModel: browseModel)
-                .navigationSplitViewColumnWidth(min: 280, ideal: 320, max: 390)
+                .navigationSplitViewColumnWidth(min: 280, ideal: 340, max: 450)
         }
         .toolbar {
             ToolbarItemGroup {
@@ -52,6 +60,8 @@ struct BrowseView: View {
                 .popover(isPresented: $browseModel.isFilterPresented) {
                     BrowseFilterPopover(browseModel: browseModel)
                 }
+
+                Spacer()
 
                 Text(L10n.browseItemCount(browseModel.displayedItems.count, language))
                     .font(.caption)
