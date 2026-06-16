@@ -19,16 +19,15 @@
 // If you reuse this code (modified or not), you must keep this notice
 // and credit the original author (Lirui Yu).
 
-import AppKit
 import SwiftUI
 
-struct InspectorView: View {
-    @ObservedObject var model: ScanViewModel
+struct BrowsePreviewPanel: View {
+    @ObservedObject var browseModel: BrowseViewModel
     @Environment(\.appLanguage) private var language
 
     var body: some View {
         Group {
-            if let media = model.selectedMedia {
+            if let media = browseModel.selectedMedia {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 16) {
                         MediaPreview(media: media)
@@ -46,15 +45,15 @@ struct InspectorView: View {
 
                         HStack {
                             if media.kind == .video {
-                                Button(L10n.openDefaultPlayer(language), action: model.openSelectedMedia)
+                                Button(L10n.openDefaultPlayer(language)) { browseModel.scanModel.openMedia(media) }
                             }
-                            Button(L10n.showInFinder(language), action: model.revealSelectedMedia)
+                            Button(L10n.showInFinder(language)) { browseModel.scanModel.revealMedia(media) }
                         }
                         .controlSize(.small)
 
                         Divider()
                         Button(role: .destructive) {
-                            model.requestDeletion(of: media)
+                            browseModel.scanModel.requestDeletion(of: media)
                         } label: {
                             Label(L10n.deleteMedia(language), systemImage: "trash")
                                 .frame(maxWidth: .infinity)
@@ -71,7 +70,7 @@ struct InspectorView: View {
                 )
             }
         }
-        .navigationTitle(L10n.previewAndDetails(language))
+        .navigationTitle("")
     }
 
     private func metadata(_ title: String, _ value: String) -> some View {
@@ -79,33 +78,5 @@ struct InspectorView: View {
             Text(title).font(.caption).foregroundStyle(.secondary)
             Text(value).font(.callout).textSelection(.enabled)
         }
-    }
-}
-
-struct MediaPreview: View {
-    let media: MediaItem
-
-    var body: some View {
-        Group {
-            if let data = media.thumbnailData, let image = NSImage(data: data) {
-                Image(nsImage: image)
-                    .resizable()
-                    .scaledToFit()
-            } else {
-                ZStack {
-                    Color.secondary.opacity(0.12)
-                    Image(systemName: media.kind == .video ? "film" : "photo")
-                        .font(.system(size: 42))
-                        .foregroundStyle(.secondary)
-                }
-            }
-        }
-            .aspectRatio(previewAspectRatio, contentMode: .fit)
-            .clipShape(RoundedRectangle(cornerRadius: 10))
-    }
-
-    private var previewAspectRatio: CGFloat {
-        guard media.kind == .image, media.width > 0, media.height > 0 else { return 16 / 9 }
-        return CGFloat(media.width) / CGFloat(media.height)
     }
 }

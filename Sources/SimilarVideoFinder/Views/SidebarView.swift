@@ -24,6 +24,7 @@ import SwiftUI
 struct SidebarView: View {
     @ObservedObject var model: ScanViewModel
     @Environment(\.appLanguage) private var language
+    @State private var showSkippedFiles = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -102,7 +103,7 @@ struct SidebarView: View {
                 Slider(value: $model.threshold, in: ScanViewModel.displayThresholdRange, step: 0.01) {
                     EmptyView()
                 } minimumValueLabel: {
-                    Text("50%").font(.system(size: 9)).foregroundStyle(.tertiary)
+                    Text("60%").font(.system(size: 9)).foregroundStyle(.tertiary)
                 } maximumValueLabel: {
                     Text("100%").font(.system(size: 9)).foregroundStyle(.tertiary)
                 }
@@ -115,10 +116,15 @@ struct SidebarView: View {
             }
 
             if !model.issues.isEmpty {
-                Label(L10n.skippedFiles(model.issues.count, language), systemImage: "exclamationmark.triangle")
-                    .font(.caption)
-                    .foregroundStyle(.orange)
-                    .help(model.issues.map { "\($0.url.lastPathComponent): \($0.message(language: language))" }.joined(separator: "\n"))
+                Button { showSkippedFiles.toggle() } label: {
+                    Label(L10n.skippedFiles(model.issues.count, language), systemImage: "exclamationmark.triangle")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                }
+                .buttonStyle(.plain)
+                .popover(isPresented: $showSkippedFiles) {
+                    SkippedFilesList(issues: model.issues, language: language)
+                }
             }
         }
         .padding(14)
@@ -163,5 +169,47 @@ struct SidebarView: View {
             }
             .tag(group.id)
         }
+    }
+}
+
+// MARK: - Skipped Files Popover
+
+struct SkippedFilesList: View {
+    let issues: [ScanIssue]
+    let language: AppLanguage
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text(L10n.skippedFiles(issues.count, language))
+                .font(.headline)
+                .padding(.bottom, 8)
+
+            Divider()
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(issues) { issue in
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(issue.url.lastPathComponent)
+                                .font(.callout.weight(.medium))
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                            Text(issue.message(language: language))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            Text(issue.url.deletingLastPathComponent().path)
+                                .font(.caption2)
+                                .foregroundStyle(.tertiary)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
+                        .padding(.vertical, 2)
+                    }
+                }
+                .padding(.vertical, 8)
+            }
+        }
+        .padding(16)
+        .frame(width: 320, height: min(CGFloat(issues.count) * 60 + 60, 400))
     }
 }

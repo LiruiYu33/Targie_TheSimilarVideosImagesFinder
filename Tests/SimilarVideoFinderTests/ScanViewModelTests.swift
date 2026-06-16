@@ -121,7 +121,7 @@ final class ScanViewModelTests: XCTestCase {
     }
 
     func testDisplayThresholdSupportsExactMatchFiltering() {
-        XCTAssertEqual(ScanViewModel.displayThresholdRange.lowerBound, 0.50)
+        XCTAssertEqual(ScanViewModel.displayThresholdRange.lowerBound, 0.60)
         XCTAssertEqual(ScanViewModel.displayThresholdRange.upperBound, 1.0)
     }
 

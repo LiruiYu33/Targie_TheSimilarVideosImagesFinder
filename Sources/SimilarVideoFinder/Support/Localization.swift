@@ -117,6 +117,21 @@ enum L10n {
     static func fileMissing(_ l: AppLanguage) -> String { text(l, "The file no longer exists", "文件已不存在") }
     static func deletionFailed(_ message: String, _ l: AppLanguage) -> String { text(l, "Deletion failed: \(message)", "删除失败：\(message)") }
 
+    // Browse feature
+    static func browse(_ l: AppLanguage) -> String { text(l, "Browse", "浏览") }
+    static func filter(_ l: AppLanguage) -> String { text(l, "Filter", "筛选") }
+    static func name(_ l: AppLanguage) -> String { text(l, "Name", "名称") }
+    static func modifiedTime(_ l: AppLanguage) -> String { text(l, "Modified", "修改时间") }
+    static func thumbnail(_ l: AppLanguage) -> String { text(l, "Preview", "缩略图") }
+    static func mediaType(_ l: AppLanguage) -> String { text(l, "Media Type", "媒体类型") }
+    static func width(_ l: AppLanguage) -> String { text(l, "Width", "宽") }
+    static func height(_ l: AppLanguage) -> String { text(l, "Height", "高") }
+    static func clearFilter(_ l: AppLanguage) -> String { text(l, "Clear Filter", "清除筛选") }
+    static func browseItemCount(_ count: Int, _ l: AppLanguage) -> String { text(l, "\(count) items", "\(count) 项") }
+    static func noItemsToBrowse(_ l: AppLanguage) -> String { text(l, "No Items to Browse", "无可浏览的文件") }
+    static func noItemsBrowseHint(_ l: AppLanguage) -> String { text(l, "Add folders and browse to see files.", "添加文件夹并浏览以查看文件。") }
+    static func discoveringFiles(_ l: AppLanguage) -> String { text(l, "Discovering files…", "正在发现文件…") }
+
     static func evidence(_ value: SimilarityEvidence, _ l: AppLanguage) -> String {
         switch value {
         case .identicalContentHash: text(l, "Identical content", "内容完全一致")
