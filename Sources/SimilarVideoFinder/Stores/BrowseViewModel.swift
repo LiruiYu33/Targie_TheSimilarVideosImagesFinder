@@ -56,13 +56,18 @@ final class BrowseViewModel: ObservableObject {
 
     enum SortField: String, CaseIterable, Identifiable, Sendable {
         case name, fileSize, modifiedTime
+        case resolutionWidth, resolutionHeight
         var id: String { rawValue }
+
+        /// Whether this field sorts by a resolution dimension (width or height).
+        var isResolution: Bool { self == .resolutionWidth || self == .resolutionHeight }
     }
 
     // MARK: - Published State
 
     @Published var sortField: SortField = .name
     @Published var sortAscending: Bool = true
+    @Published var isResolutionSortPresented: Bool = false
     @Published var mediaFilter: MediaFilter = .all
     @Published var resolutionComparator: ResolutionComparator = .lessThan
     @Published var selectedResolutionPreset: ResolutionPreset?
@@ -124,6 +129,10 @@ final class BrowseViewModel: ObservableObject {
                 let d1 = a.modifiedAt ?? .distantPast
                 let d2 = b.modifiedAt ?? .distantPast
                 result = d1 < d2
+            case .resolutionWidth:
+                result = a.width < b.width
+            case .resolutionHeight:
+                result = a.height < b.height
             }
             return sortAscending ? result : !result
         }
@@ -166,6 +175,12 @@ final class BrowseViewModel: ObservableObject {
             sortField = field
             sortAscending = true
         }
+    }
+
+    /// Reset sort back to name/ascending (used by the resolution sort popover's Clear button).
+    func clearResolutionSort() {
+        sortField = .name
+        sortAscending = true
     }
 
     func clearResolutionFilter() {

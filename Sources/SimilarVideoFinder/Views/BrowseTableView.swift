@@ -82,7 +82,7 @@ struct BrowseTableView: View {
 
             sortHeader(L10n.fileSize(language), field: .fileSize, width: 90)
 
-            headerLabel(L10n.resolution(language), width: 110)
+            resolutionSortHeader
 
             sortHeader(L10n.modifiedTime(language), field: .modifiedTime, width: 120)
         }
@@ -128,6 +128,103 @@ struct BrowseTableView: View {
                 .buttonStyle(.plain)
             }
         }
+    }
+
+    /// Resolution has two dimensions (width × height), so its header opens a
+    /// popover instead of toggling directly — letting the user pick which side
+    /// to sort by, plus the direction.
+    private var resolutionSortHeader: some View {
+        Button { browseModel.isResolutionSortPresented.toggle() } label: {
+            HStack(spacing: 4) {
+                Text(L10n.resolution(language))
+                if browseModel.sortField.isResolution {
+                    Image(systemName: browseModel.sortAscending ? "chevron.up" : "chevron.down")
+                        .font(.caption2)
+                }
+            }
+            .frame(width: 110, alignment: .leading)
+        }
+        .buttonStyle(.plain)
+        .popover(isPresented: $browseModel.isResolutionSortPresented) {
+            BrowseResolutionSortPopover(browseModel: browseModel)
+        }
+    }
+}
+
+// MARK: - Resolution Sort Popover
+
+struct BrowseResolutionSortPopover: View {
+    @ObservedObject var browseModel: BrowseViewModel
+    @Environment(\.appLanguage) private var language
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text(L10n.resolutionSort(language))
+                    .font(.headline)
+
+                Text(L10n.sortBy(language))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Picker("", selection: sortFieldBinding) {
+                    Text(L10n.sortByWidth(language)).tag(BrowseViewModel.SortField.resolutionWidth)
+                    Text(L10n.sortByHeight(language)).tag(BrowseViewModel.SortField.resolutionHeight)
+                }
+                .pickerStyle(.segmented)
+            }
+
+            Divider()
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text(L10n.sortDirection(language))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Picker("", selection: sortAscendingBinding) {
+                    Text(L10n.ascending(language)).tag(true)
+                    Text(L10n.descending(language)).tag(false)
+                }
+                .pickerStyle(.segmented)
+            }
+
+            if browseModel.sortField.isResolution {
+                Button(L10n.clearFilter(language), action: browseModel.clearResolutionSort)
+                    .controlSize(.small)
+            }
+        }
+        .padding(16)
+        .frame(width: 280)
+        // Selecting the field from a cold start defaults to ascending.
+        .onAppear {
+            if !browseModel.sortField.isResolution {
+                browseModel.sortField = .resolutionWidth
+                browseModel.sortAscending = true
+            }
+        }
+    }
+
+    /// Switching to a resolution field resets direction to ascending, mirroring
+    /// `toggleSort`'s behaviour for the other headers.
+    private var sortFieldBinding: Binding<BrowseViewModel.SortField> {
+        Binding(
+            get: {
+                browseModel.sortField.isResolution ? browseModel.sortField : .resolutionWidth
+            },
+            set: { newField in
+                if browseModel.sortField != newField {
+                    browseModel.sortField = newField
+                    browseModel.sortAscending = true
+                }
+            }
+        )
+    }
+
+    private var sortAscendingBinding: Binding<Bool> {
+        Binding(
+            get: { browseModel.sortAscending },
+            set: { browseModel.sortAscending = $0 }
+        )
     }
 }
 
