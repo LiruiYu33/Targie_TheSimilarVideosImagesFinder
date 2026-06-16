@@ -26,11 +26,46 @@ struct ContentView: View {
     @AppStorage("appLanguage") private var languageRawValue = AppLanguage.defaultLanguage.rawValue
     @AppStorage("scanMode") private var scanModeRawValue = ScanMode.all.rawValue
 
+    @State private var appMode: AppMode = .scan
+    @State private var browseModel: BrowseViewModel?
+
     private var language: AppLanguage {
         AppLanguage(rawValue: languageRawValue) ?? .defaultLanguage
     }
 
     var body: some View {
+        Group {
+            switch appMode {
+            case .scan:
+                scanView
+            case .browse:
+                if let browseModel {
+                    BrowseView(browseModel: browseModel, onBack: exitBrowseMode)
+                        .sheet(item: $model.deletePrompt) { _ in
+                            DeleteConfirmationView(model: model)
+                        }
+                }
+            }
+        }
+        .alert(L10n.operationFailed(language), isPresented: Binding(
+            get: { model.presentedError != nil },
+            set: { if !$0 { model.presentedError = nil } }
+        )) {
+            Button(L10n.ok(language)) { model.presentedError = nil }
+        } message: {
+            Text(model.localizedError(language) ?? L10n.unknownError(language))
+        }
+        .dropDestination(for: URL.self) { urls, _ in
+            model.addFolders(urls)
+        }
+        .environment(\.appLanguage, language)
+        .onAppear { model.setScanMode(ScanMode(rawValue: scanModeRawValue) ?? .all) }
+        .background(WindowTitleUpdater(title: L10n.appName(language)))
+    }
+
+    // MARK: - Scan Mode View
+
+    private var scanView: some View {
         NavigationSplitView {
             SidebarView(model: model)
                 .navigationSplitViewColumnWidth(min: 220, ideal: 260, max: 320)
@@ -53,6 +88,10 @@ struct ContentView: View {
                 }
                 .pickerStyle(.segmented)
                 .frame(width: 220)
+                Button(action: enterBrowseMode) {
+                    Label(L10n.browse(language), systemImage: "doc.text.image")
+                }
+                .disabled(model.selectedFolders.isEmpty)
                 Button(action: { model.chooseFolder(language: language) }) {
                     Label(L10n.chooseFolder(language), systemImage: "folder.badge.plus")
                 }
@@ -80,24 +119,33 @@ struct ContentView: View {
         .sheet(item: $model.deletePrompt) { _ in
             DeleteConfirmationView(model: model)
         }
-        .alert(L10n.operationFailed(language), isPresented: Binding(
-            get: { model.presentedError != nil },
-            set: { if !$0 { model.presentedError = nil } }
-        )) {
-            Button(L10n.ok(language)) { model.presentedError = nil }
-        } message: {
-            Text(model.localizedError(language) ?? L10n.unknownError(language))
-        }
         .onDeleteCommand {
             if let video = model.selectedMedia { model.requestDeletion(of: video) }
         }
-        .dropDestination(for: URL.self) { urls, _ in
-            model.addFolders(urls)
-        }
-        .environment(\.appLanguage, language)
-        .onAppear { model.setScanMode(ScanMode(rawValue: scanModeRawValue) ?? .all) }
-        .background(WindowTitleUpdater(title: L10n.appName(language)))
     }
+
+    // MARK: - Mode Switching
+
+    private func enterBrowseMode() {
+        if !model.hasDiscoveredItems {
+            model.discoverFiles()
+        }
+        let bm = BrowseViewModel(scanModel: model)
+        browseModel = bm
+        appMode = .browse
+    }
+
+    private func exitBrowseMode() {
+        appMode = .scan
+        browseModel = nil
+    }
+}
+
+// MARK: - App Mode
+
+enum AppMode {
+    case scan
+    case browse
 }
 
 private struct WindowTitleUpdater: NSViewRepresentable {

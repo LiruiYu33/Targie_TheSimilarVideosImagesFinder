@@ -93,9 +93,15 @@ final class ScanViewModel: ObservableObject {
         try? HashCache()
     }
 
+    /// All media items discovered during scanning or file discovery.
+    var items: [MediaItem] { allItems }
+
     var isScanning: Bool {
         [.discovering, .readingMetadata, .prehashing, .hashing, .comparing].contains(progress.stage)
     }
+
+    /// Whether browse mode has data to show.
+    var hasDiscoveredItems: Bool { !allItems.isEmpty }
 
     var selectedGroup: SimilarityGroup? {
         groups.first { $0.id == selectedGroupID }
@@ -219,6 +225,50 @@ final class ScanViewModel: ObservableObject {
         scanTask?.cancel()
     }
 
+    /// Lightweight file discovery — populates `allItems` without running
+    /// similarity pipelines.  Used by Browse mode.
+    func discoverFiles() {
+        guard !selectedFolders.isEmpty, !isScanning else { return }
+        guard allItems.isEmpty else { return }
+
+        let folders = selectedFolders
+        scanTask?.cancel()
+        progress = ScanProgress(stage: .discovering)
+
+        scanTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                var items: [MediaItem] = []
+                if scanMode != .images {
+                    for folder in folders {
+                        try Task.checkCancellation()
+                        let result = try await scanner.scan(folder: folder) { [weak self] update in
+                            await MainActor.run { self?.progress = update }
+                        }
+                        items.append(contentsOf: result.videos)
+                    }
+                }
+                if scanMode != .videos {
+                    for folder in folders {
+                        try Task.checkCancellation()
+                        let result = try await imageScanner.scan(folder: folder) { [weak self] update in
+                            await MainActor.run { self?.progress = update }
+                        }
+                        items.append(contentsOf: result.images)
+                    }
+                }
+                items = uniqueItemsByURL(items)
+                allItems = items
+                progress = ScanProgress(stage: .completed, fraction: 1, discoveredCount: items.count)
+            } catch is CancellationError {
+                progress = ScanProgress(stage: .cancelled)
+            } catch {
+                presentedError = .message(error.localizedDescription)
+                progress = ScanProgress(stage: .idle)
+            }
+        }
+    }
+
     func setScanMode(_ mode: ScanMode) {
         guard scanMode != mode else { return }
         scanTask?.cancel()
@@ -286,6 +336,18 @@ final class ScanViewModel: ObservableObject {
 
     func openSelectedMedia() {
         if let media = selectedMedia { deletionService.open(media.url) }
+    }
+
+    func revealMedia(_ media: MediaItem) { deletionService.reveal(media.url) }
+    func openMedia(_ media: MediaItem) { deletionService.open(media.url) }
+
+    /// Remove a media item from allItems (and related relations/groups).
+    /// Used after deletion from Browse mode.
+    func removeItem(_ id: UUID) {
+        allItems.removeAll { $0.id == id }
+        allRelations.removeAll { $0.contains(id) }
+        checkedMediaIDs.remove(id)
+        rebuildGroups()
     }
 
     func replaceResultsForTesting(items: [MediaItem], relations: [SimilarityRelation]) {
