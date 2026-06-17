@@ -163,7 +163,7 @@ private final class PlayerHolder: ObservableObject {
         guard FileManager.default.fileExists(atPath: url.path) else { return }
         let item = AVPlayerItem(url: url)
         let newPlayer = AVPlayer(playerItem: item)
-        newPlayer.isMuted = true
+        newPlayer.volume = 0.5
         player = newPlayer
     }
 

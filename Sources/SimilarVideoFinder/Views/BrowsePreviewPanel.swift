@@ -141,7 +141,7 @@ struct NativeVideoPlayerView: NSViewRepresentable {
         if FileManager.default.fileExists(atPath: url.path) {
             let item = AVPlayerItem(url: url)
             let player = AVPlayer(playerItem: item)
-            player.isMuted = true
+            player.volume = 0.5
             nsView.player = player
         } else {
             nsView.player = nil

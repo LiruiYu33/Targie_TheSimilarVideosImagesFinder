@@ -65,14 +65,22 @@ final class BrowseViewModel: ObservableObject {
 
     // MARK: - Published State
 
-    @Published var sortField: SortField = .name
-    @Published var sortAscending: Bool = true
+    /// Filtered and sorted items ready for display.
+    /// Explicitly published so the List reliably reorders when sort/filter changes.
+    @Published var displayedItems: [MediaItem] = []
+
+    /// Incremented on every recompute so SwiftUI List reorders rows
+    /// when the same items appear in a different sort order.
+    @Published var sortVersion: Int = 0
+
+    @Published var sortField: SortField = .name { didSet { recomputeDisplayedItems(bumpSortVersion: true) } }
+    @Published var sortAscending: Bool = true  { didSet { recomputeDisplayedItems(bumpSortVersion: true) } }
     @Published var isResolutionSortPresented: Bool = false
-    @Published var mediaFilter: MediaFilter = .all
-    @Published var resolutionComparator: ResolutionComparator = .lessThan
-    @Published var selectedResolutionPreset: ResolutionPreset?
-    @Published var manualWidth: String = ""
-    @Published var manualHeight: String = ""
+    @Published var mediaFilter: MediaFilter = .all { didSet { recomputeDisplayedItems() } }
+    @Published var resolutionComparator: ResolutionComparator = .lessThan { didSet { recomputeDisplayedItems() } }
+    @Published var selectedResolutionPreset: ResolutionPreset? { didSet { recomputeDisplayedItems() } }
+    @Published var manualWidth: String = "" { didSet { recomputeDisplayedItems() } }
+    @Published var manualHeight: String = "" { didSet { recomputeDisplayedItems() } }
     @Published var selectedMediaID: UUID?
     @Published var isFilterPresented: Bool = false
 
@@ -88,15 +96,18 @@ final class BrowseViewModel: ObservableObject {
         scanModel.objectWillChange
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in
-                self?.objectWillChange.send()
+                guard let self else { return }
+                self.objectWillChange.send()
+                self.recomputeDisplayedItems()
             }
             .store(in: &cancellables)
+
+        recomputeDisplayedItems()
     }
 
-    // MARK: - Computed
+    // MARK: - Displayed items computation
 
-    /// Filtered and sorted items ready for display.
-    var displayedItems: [MediaItem] {
+    private func recomputeDisplayedItems(bumpSortVersion: Bool = false) {
         var items = scanModel.items
 
         // Media type filter
@@ -137,7 +148,10 @@ final class BrowseViewModel: ObservableObject {
             return sortAscending ? result : !result
         }
 
-        return items
+        displayedItems = items
+        if bumpSortVersion {
+            sortVersion &+= 1
+        }
     }
 
     /// The selected item from the browse table.
