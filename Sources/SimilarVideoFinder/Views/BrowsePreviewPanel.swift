@@ -28,7 +28,9 @@ struct BrowsePreviewPanel: View {
 
     var body: some View {
         Group {
-            if let media = browseModel.selectedMedia {
+            if browseModel.hasMultipleSelection {
+                BrowseStackedPreview(browseModel: browseModel, language: language)
+            } else if let media = browseModel.selectedMedia {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 16) {
                         BrowseMediaPreview(media: media)
@@ -72,6 +74,101 @@ struct BrowsePreviewPanel: View {
             }
         }
         .navigationTitle("")
+    }
+
+    private func metadata(_ title: String, _ value: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title).font(.caption).foregroundStyle(.secondary)
+            Text(value).font(.callout).textSelection(.enabled)
+        }
+    }
+}
+
+// MARK: - Stacked Selection Preview
+
+struct BrowseStackedPreview: View {
+    @ObservedObject var browseModel: BrowseViewModel
+    let language: AppLanguage
+
+    private var selectedItems: [MediaItem] { browseModel.selectedMediaList }
+    private var visibleItems: [MediaItem] { Array(selectedItems.prefix(8)) }
+    private var extraCount: Int { max(0, selectedItems.count - visibleItems.count) }
+    private var totalSize: Int64 { selectedItems.reduce(0) { $0 + $1.fileSize } }
+    private var imageCount: Int { selectedItems.filter { $0.kind == .image }.count }
+    private var videoCount: Int { selectedItems.filter { $0.kind == .video }.count }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                ZStack {
+                    ForEach(Array(visibleItems.enumerated()), id: \.element.id) { index, item in
+                        stackedThumbnail(item: item, index: index)
+                    }
+                    if extraCount > 0 {
+                        Text("+\(extraCount)")
+                            .font(.headline.bold())
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                            .background(.regularMaterial, in: Capsule())
+                            .offset(x: 74, y: 54)
+                    }
+                }
+                .frame(maxWidth: .infinity)
+                .frame(height: 240)
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(L10n.selectedCount(selectedItems.count, language))
+                        .font(.title3.bold())
+                    metadata(L10n.fileSize(language), DisplayFormatters.fileSize(totalSize))
+                    metadata(L10n.images(language), "\(imageCount)")
+                    metadata(L10n.videos(language), "\(videoCount)")
+                }
+
+                HStack {
+                    if let first = selectedItems.first {
+                        Button(L10n.showInFinder(language)) { browseModel.scanModel.revealMedia(first) }
+                    }
+                    Button(role: .destructive) {
+                        browseModel.scanModel.requestDeletion(of: selectedItems)
+                    } label: {
+                        Label(L10n.deleteSelected(selectedItems.count, language), systemImage: "trash")
+                    }
+                }
+                .controlSize(.small)
+
+                Divider()
+
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(selectedItems.prefix(12)) { item in
+                        Text(item.filename)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                    if selectedItems.count > 12 {
+                        Text("+\(selectedItems.count - 12)")
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .font(.caption)
+                .textSelection(.enabled)
+            }
+            .padding(18)
+        }
+    }
+
+    private func stackedThumbnail(item: MediaItem, index: Int) -> some View {
+        let offset = CGFloat(index) * 12
+        let rotation = Double(index - visibleItems.count / 2) * 3
+        return BrowseThumbnailCell(item: item)
+            .frame(width: 170, height: 120)
+            .background(Color.secondary.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
+            .overlay {
+                RoundedRectangle(cornerRadius: 10)
+                    .stroke(Color.secondary.opacity(0.18), lineWidth: 1)
+            }
+            .shadow(color: .black.opacity(0.18), radius: 10, y: 4)
+            .rotationEffect(.degrees(rotation))
+            .offset(x: offset - 42, y: offset * 0.45 - 18)
     }
 
     private func metadata(_ title: String, _ value: String) -> some View {

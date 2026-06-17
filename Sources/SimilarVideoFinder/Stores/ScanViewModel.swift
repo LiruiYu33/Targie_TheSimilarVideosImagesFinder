@@ -289,7 +289,11 @@ final class ScanViewModel: ObservableObject {
     }
 
     func requestDeletion(of media: MediaItem) {
-        deletePrompt = DeletePrompt(media: [media], step: .choosingMethod)
+        requestDeletion(of: [media])
+    }
+
+    func requestDeletion(of media: [MediaItem]) {
+        if !media.isEmpty { deletePrompt = DeletePrompt(media: media, step: .choosingMethod) }
     }
 
     func requestCheckedDeletion() {

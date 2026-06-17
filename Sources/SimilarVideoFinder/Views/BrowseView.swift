@@ -103,6 +103,32 @@ struct BrowseView: View {
                 .popover(isPresented: $browseModel.isFilterPresented) {
                     BrowseFilterPopover(browseModel: browseModel)
                 }
+
+                ToolbarLabeledButton(
+                    title: browseModel.isBatchSelectionMode ? L10n.done(language) : L10n.select(language),
+                    systemImage: browseModel.isBatchSelectionMode ? "checklist.checked" : "checklist"
+                ) {
+                    browseModel.toggleBatchSelectionMode()
+                }
+                .disabled(browseModel.displayedItems.isEmpty)
+
+                if browseModel.isBatchSelectionMode {
+                    ToolbarLabeledButton(
+                        title: L10n.selectAll(language),
+                        systemImage: "checkmark.circle"
+                    ) {
+                        browseModel.selectAllDisplayed()
+                    }
+                    .disabled(browseModel.displayedItems.isEmpty)
+
+                    ToolbarLabeledButton(
+                        title: L10n.clearSelection(language),
+                        systemImage: "xmark.circle"
+                    ) {
+                        browseModel.deselectAll()
+                    }
+                    .disabled(browseModel.selectedMediaIDs.isEmpty)
+                }
             }
         }
     }

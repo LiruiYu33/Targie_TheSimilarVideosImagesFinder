@@ -120,6 +120,10 @@ enum L10n {
     // Browse feature
     static func browse(_ l: AppLanguage) -> String { text(l, "Browse", "浏览") }
     static func filter(_ l: AppLanguage) -> String { text(l, "Filter", "筛选") }
+    static func select(_ l: AppLanguage) -> String { text(l, "Select", "选择") }
+    static func done(_ l: AppLanguage) -> String { text(l, "Done", "完成") }
+    static func selectAll(_ l: AppLanguage) -> String { text(l, "Select All", "全选") }
+    static func clearSelection(_ l: AppLanguage) -> String { text(l, "Clear", "清除") }
     static func name(_ l: AppLanguage) -> String { text(l, "Name", "名称") }
     static func modifiedTime(_ l: AppLanguage) -> String { text(l, "Modified", "修改时间") }
     static func thumbnail(_ l: AppLanguage) -> String { text(l, "Preview", "缩略图") }
