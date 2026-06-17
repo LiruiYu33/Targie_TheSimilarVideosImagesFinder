@@ -24,6 +24,7 @@ import SwiftUI
 
 /// Effective per-column widths after fitting the table to the container.
 struct BrowseColumnWidths: Equatable {
+    let checkbox: CGFloat
     let thumbnail: CGFloat
     let name: CGFloat
     let fileSize: CGFloat
@@ -43,6 +44,7 @@ struct BrowseTableView: View {
 
     private let rowHorizontalPadding: CGFloat = 12
     private let dividerWidth: CGFloat = 6
+    private let checkboxWidth: CGFloat = 26
     private let nameMinWidth: CGFloat = 60
 
     var body: some View {
@@ -78,15 +80,25 @@ struct BrowseTableView: View {
 
                     Divider()
 
-                    List(selection: Binding(
-                        get: { browseModel.selectedMediaID },
-                        set: { browseModel.selectMedia($0) }
+                    List(selection: Binding<Set<UUID>>(
+                        get: { browseModel.selectedMediaIDs },
+                        set: { selection in updateSelection(selection) }
                     )) {
                         ForEach(browseModel.displayedItems) { item in
-                            BrowseTableRow(item: item, language: language, widths: widths)
-                                .padding(.horizontal, rowHorizontalPadding)
-                                .listRowInsets(EdgeInsets())
-                                .tag(item.id)
+                            BrowseTableRow(
+                                item: item,
+                                language: language,
+                                widths: widths,
+                                isSelected: browseModel.selectedMediaIDs.contains(item.id),
+                                isPrimary: browseModel.primarySelectedID == item.id,
+                                isBatchSelectionMode: browseModel.isBatchSelectionMode,
+                                isChecked: browseModel.selectedMediaIDs.contains(item.id),
+                                onToggleCheck: { browseModel.toggleMedia(item.id) },
+                                onShiftSelect: { browseModel.extendSelection(to: item.id) }
+                            )
+                            .padding(.horizontal, rowHorizontalPadding)
+                            .listRowInsets(EdgeInsets())
+                            .tag(item.id)
                         }
                     }
                     .id(browseModel.sortVersion)
@@ -105,9 +117,10 @@ struct BrowseTableView: View {
     private func computeWidths(forContainerWidth container: CGFloat) -> BrowseColumnWidths {
         let inner = max(0, container - 2 * rowHorizontalPadding)
         let dividers = 3 * dividerWidth
+        let checkbox = browseModel.isBatchSelectionMode ? checkboxWidth : 0
 
         let preferred = thumbnailWidth + fileSizeWidth + resolutionWidth + modifiedTimeWidth
-        let availableForFixed = max(0, inner - dividers - nameMinWidth)
+        let availableForFixed = max(0, inner - checkbox - dividers - nameMinWidth)
 
         let scale: CGFloat = preferred > availableForFixed && preferred > 0
             ? availableForFixed / preferred
@@ -119,9 +132,10 @@ struct BrowseTableView: View {
         let mod   = modifiedTimeWidth * scale
 
         let usedFixed = thumb + size + res + mod
-        let nameWidth = max(nameMinWidth, inner - dividers - usedFixed)
+        let nameWidth = max(nameMinWidth, inner - checkbox - dividers - usedFixed)
 
         return BrowseColumnWidths(
+            checkbox: checkbox,
             thumbnail: thumb,
             name: nameWidth,
             fileSize: size,
@@ -134,6 +148,16 @@ struct BrowseTableView: View {
 
     private func browseTableHeader(widths: BrowseColumnWidths) -> some View {
         HStack(spacing: 0) {
+            if browseModel.isBatchSelectionMode {
+                Toggle("", isOn: Binding(
+                    get: { !browseModel.displayedItems.isEmpty && browseModel.selectedMediaIDs.count == browseModel.displayedItems.count },
+                    set: { isOn in isOn ? browseModel.selectAllDisplayed() : browseModel.deselectAll() }
+                ))
+                .toggleStyle(.checkbox)
+                .labelsHidden()
+                .frame(width: widths.checkbox, alignment: .leading)
+            }
+
             Text(L10n.thumbnail(language))
                 .lineLimit(1)
                 .frame(width: widths.thumbnail, alignment: .leading)
@@ -192,6 +216,10 @@ struct BrowseTableView: View {
             BrowseResolutionSortPopover(browseModel: browseModel, language: language)
         }
     }
+
+    private func updateSelection(_ selection: Set<UUID>) {
+        browseModel.replaceSelection(with: selection)
+    }
 }
 
 // MARK: - Column Resize Handle
@@ -237,9 +265,25 @@ struct BrowseTableRow: View {
     let item: MediaItem
     let language: AppLanguage
     let widths: BrowseColumnWidths
+    let isSelected: Bool
+    let isPrimary: Bool
+    let isBatchSelectionMode: Bool
+    let isChecked: Bool
+    let onToggleCheck: () -> Void
+    let onShiftSelect: () -> Void
 
     var body: some View {
         HStack(spacing: 0) {
+            if isBatchSelectionMode {
+                Toggle("", isOn: Binding(
+                    get: { isChecked },
+                    set: { _ in onToggleCheck() }
+                ))
+                .toggleStyle(.checkbox)
+                .labelsHidden()
+                .frame(width: widths.checkbox, alignment: .leading)
+            }
+
             BrowseThumbnailCell(item: item)
                 .frame(width: min(widths.thumbnail, 40), height: min(widths.thumbnail, 40))
                 .frame(width: widths.thumbnail, alignment: .leading)
@@ -284,6 +328,16 @@ struct BrowseTableRow: View {
         }
         .font(.callout)
         .padding(.vertical, 4)
+        .padding(.horizontal, 3)
+        .overlay {
+            RoundedRectangle(cornerRadius: 6)
+                .stroke(
+                    isSelected ? Color.accentColor.opacity(isPrimary ? 1 : 0.6) : Color.clear,
+                    lineWidth: isSelected ? (isPrimary ? 2 : 1) : 0
+                )
+        }
+        .contentShape(Rectangle())
+        .simultaneousGesture(TapGesture().modifiers(.shift).onEnded(onShiftSelect))
     }
 }
 

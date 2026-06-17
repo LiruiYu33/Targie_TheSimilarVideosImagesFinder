@@ -86,11 +86,20 @@ struct BrowseView: View {
         .background(WindowTitleUpdater(title: L10n.browseItemCount(browseModel.displayedItems.count, language)))
         .toolbar {
             ToolbarItemGroup {
-                ToolbarLabeledButton(
-                    title: L10n.back(language),
-                    systemImage: "chevron.left",
-                    action: onBack
-                )
+                if browseModel.isBatchSelectionMode {
+                    ToolbarLabeledButton(
+                        title: L10n.done(language),
+                        systemImage: "checkmark"
+                    ) {
+                        browseModel.toggleBatchSelectionMode()
+                    }
+                } else {
+                    ToolbarLabeledButton(
+                        title: L10n.back(language),
+                        systemImage: "chevron.left",
+                        action: onBack
+                    )
+                }
 
                 ToolbarLabeledButton(
                     title: L10n.filter(language),
@@ -102,6 +111,34 @@ struct BrowseView: View {
                 }
                 .popover(isPresented: $browseModel.isFilterPresented) {
                     BrowseFilterPopover(browseModel: browseModel)
+                }
+
+                if !browseModel.isBatchSelectionMode {
+                    ToolbarLabeledButton(
+                        title: L10n.select(language),
+                        systemImage: "checklist"
+                    ) {
+                        browseModel.toggleBatchSelectionMode()
+                    }
+                    .disabled(browseModel.displayedItems.isEmpty)
+                }
+
+                if browseModel.isBatchSelectionMode {
+                    ToolbarLabeledButton(
+                        title: L10n.selectAll(language),
+                        systemImage: "checkmark.circle"
+                    ) {
+                        browseModel.selectAllDisplayed()
+                    }
+                    .disabled(browseModel.displayedItems.isEmpty)
+
+                    ToolbarLabeledButton(
+                        title: L10n.clearSelection(language),
+                        systemImage: "xmark.circle"
+                    ) {
+                        browseModel.deselectAll()
+                    }
+                    .disabled(browseModel.selectedMediaIDs.isEmpty)
                 }
             }
         }

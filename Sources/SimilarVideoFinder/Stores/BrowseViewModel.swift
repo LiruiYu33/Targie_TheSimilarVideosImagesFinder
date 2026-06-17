@@ -81,7 +81,10 @@ final class BrowseViewModel: ObservableObject {
     @Published var selectedResolutionPreset: ResolutionPreset? { didSet { recomputeDisplayedItems() } }
     @Published var manualWidth: String = "" { didSet { recomputeDisplayedItems() } }
     @Published var manualHeight: String = "" { didSet { recomputeDisplayedItems() } }
-    @Published var selectedMediaID: UUID?
+    @Published var selectedMediaIDs: Set<UUID> = []
+    @Published var primarySelectionID: UUID?
+    @Published var selectionAnchorID: UUID?
+    @Published var isBatchSelectionMode = false
     @Published var isFilterPresented: Bool = false
 
     let scanModel: ScanViewModel
@@ -149,14 +152,35 @@ final class BrowseViewModel: ObservableObject {
         }
 
         displayedItems = items
+        pruneSelection()
         if bumpSortVersion {
             sortVersion &+= 1
         }
     }
 
-    /// The selected item from the browse table.
+    /// The primary selected item from the browse table.
     var selectedMedia: MediaItem? {
-        scanModel.items.first { $0.id == selectedMediaID }
+        guard let id = effectivePrimarySelectionID else { return nil }
+        return scanModel.items.first { $0.id == id }
+    }
+
+    var selectedMediaList: [MediaItem] {
+        displayedItems.filter { selectedMediaIDs.contains($0.id) }
+    }
+
+    var hasMultipleSelection: Bool {
+        selectedMediaIDs.count > 1
+    }
+
+    var primarySelectedID: UUID? {
+        effectivePrimarySelectionID
+    }
+
+    private var effectivePrimarySelectionID: UUID? {
+        if let primarySelectionID, selectedMediaIDs.contains(primarySelectionID) {
+            return primarySelectionID
+        }
+        return displayedItems.first { selectedMediaIDs.contains($0.id) }?.id
     }
 
     // MARK: - Resolution Threshold
@@ -179,7 +203,87 @@ final class BrowseViewModel: ObservableObject {
     // MARK: - Actions
 
     func selectMedia(_ id: UUID?) {
-        selectedMediaID = id
+        guard let id else {
+            deselectAll()
+            return
+        }
+        selectedMediaIDs = [id]
+        primarySelectionID = id
+        selectionAnchorID = id
+    }
+
+    func replaceSelection(with ids: Set<UUID>) {
+        let changedID = changedSelectionID(from: ids)
+        selectedMediaIDs = ids
+        if let changedID {
+            primarySelectionID = changedID
+            selectionAnchorID = changedID
+        }
+        pruneSelection()
+    }
+
+    func toggleMedia(_ id: UUID) {
+        if selectedMediaIDs.contains(id) {
+            selectedMediaIDs.remove(id)
+        } else {
+            selectedMediaIDs.insert(id)
+            primarySelectionID = id
+            selectionAnchorID = id
+        }
+        pruneSelection()
+    }
+
+    func extendSelection(to id: UUID) {
+        let anchor = selectionAnchorID ?? primarySelectionID ?? id
+        guard let anchorIndex = displayedItems.firstIndex(where: { $0.id == anchor }),
+              let targetIndex = displayedItems.firstIndex(where: { $0.id == id }) else {
+            selectMedia(id)
+            return
+        }
+        let range = min(anchorIndex, targetIndex)...max(anchorIndex, targetIndex)
+        selectedMediaIDs = Set(displayedItems[range].map(\.id))
+        primarySelectionID = id
+    }
+
+    func selectAllDisplayed() {
+        selectedMediaIDs = Set(displayedItems.map(\.id))
+        if primarySelectionID == nil || !selectedMediaIDs.contains(primarySelectionID!) {
+            primarySelectionID = displayedItems.first?.id
+        }
+        selectionAnchorID = primarySelectionID
+    }
+
+    func deselectAll() {
+        selectedMediaIDs = []
+        primarySelectionID = nil
+        selectionAnchorID = nil
+    }
+
+    func toggleBatchSelectionMode() {
+        isBatchSelectionMode.toggle()
+    }
+
+    private func changedSelectionID(from newSelection: Set<UUID>) -> UUID? {
+        let added = newSelection.subtracting(selectedMediaIDs)
+        if let id = displayedItems.first(where: { added.contains($0.id) })?.id { return id }
+        let removed = selectedMediaIDs.subtracting(newSelection)
+        if let id = displayedItems.first(where: { removed.contains($0.id) })?.id { return id }
+        return newSelection.first
+    }
+
+    private func pruneSelection() {
+        let displayedIDs = Set(displayedItems.map(\.id))
+        selectedMediaIDs.formIntersection(displayedIDs)
+        if let primarySelectionID, !selectedMediaIDs.contains(primarySelectionID) {
+            self.primarySelectionID = displayedItems.first { selectedMediaIDs.contains($0.id) }?.id
+        }
+        if let selectionAnchorID, !displayedIDs.contains(selectionAnchorID) {
+            self.selectionAnchorID = primarySelectionID
+        }
+        if selectedMediaIDs.isEmpty {
+            primarySelectionID = nil
+            selectionAnchorID = nil
+        }
     }
 
     func toggleSort(field: SortField) {
