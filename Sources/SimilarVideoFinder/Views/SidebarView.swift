@@ -93,27 +93,7 @@ struct SidebarView: View {
                 .disabled(model.selectedFolders.isEmpty)
             }
 
-            VStack(alignment: .leading, spacing: 5) {
-                HStack {
-                    Text(L10n.displayThreshold(language))
-                    Spacer()
-                    Text(DisplayFormatters.percent(model.threshold)).monospacedDigit()
-                }
-                .font(.caption)
-                Slider(value: $model.threshold, in: ScanViewModel.displayThresholdRange, step: 0.01) {
-                    EmptyView()
-                } minimumValueLabel: {
-                    Text("60%").font(.system(size: 9)).foregroundStyle(.tertiary)
-                } maximumValueLabel: {
-                    Text("100%").font(.system(size: 9)).foregroundStyle(.tertiary)
-                }
-                .help(L10n.displayThresholdHelp(language))
-                if model.threshold < 0.72 {
-                    Text(L10n.displayThresholdHelp(language))
-                        .font(.caption2)
-                        .foregroundStyle(.orange)
-                }
-            }
+            DisplayThresholdControl(threshold: $model.threshold, language: language)
 
             if !model.issues.isEmpty {
                 Button { showSkippedFiles.toggle() } label: {
@@ -169,6 +149,113 @@ struct SidebarView: View {
             }
             .tag(group.id)
         }
+    }
+}
+
+// MARK: - Display Threshold
+
+private struct DisplayThresholdControl: View {
+    @Binding var threshold: Double
+    let language: AppLanguage
+
+    @State private var editState = DisplayThresholdTextEditState(threshold: DisplayThresholdEditing.recommendedThreshold)
+    @FocusState private var isThresholdTextFocused: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack {
+                Text(L10n.displayThreshold(language))
+                Spacer()
+                HStack(spacing: 2) {
+                    if editState.isEditing {
+                        TextField(
+                            L10n.displayThreshold(language),
+                            text: Binding(
+                                get: { editState.editText },
+                                set: { editState.editText = $0 }
+                            )
+                        )
+                        .textFieldStyle(.roundedBorder)
+                        .multilineTextAlignment(.trailing)
+                        .monospacedDigit()
+                        .frame(width: 54)
+                        .focused($isThresholdTextFocused)
+                        .onSubmit(commitThresholdText)
+                    } else {
+                        Button {
+                            beginThresholdTextEditing()
+                        } label: {
+                            Text(editState.displayText)
+                                .monospacedDigit()
+                                .frame(width: 42, alignment: .trailing)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .overlay {
+                                    RoundedRectangle(cornerRadius: 5)
+                                        .stroke(Color.secondary.opacity(0.45), lineWidth: 1)
+                                }
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    Text("%")
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                }
+                .background(
+                    ClickOutsideMonitor(
+                        isActive: editState.isEditing,
+                        onClickOutside: commitThresholdText
+                    )
+                )
+            }
+            .font(.caption)
+
+            Slider(
+                value: Binding(
+                    get: { threshold },
+                    set: { threshold = DisplayThresholdEditing.sliderValue(for: $0) }
+                ),
+                in: ScanViewModel.displayThresholdRange,
+                step: 0.01
+            ) {
+                EmptyView()
+            } minimumValueLabel: {
+                Text("60%").font(.system(size: 9)).foregroundStyle(.tertiary)
+            } maximumValueLabel: {
+                Text("100%").font(.system(size: 9)).foregroundStyle(.tertiary)
+            }
+            .help(L10n.displayThresholdHelp(language))
+
+            if threshold < DisplayThresholdEditing.recommendedThreshold {
+                Text(L10n.displayThresholdHelp(language))
+                    .font(.caption2)
+                    .foregroundStyle(.orange)
+            }
+        }
+        .onAppear { editState.syncThreshold(threshold) }
+        .onChange(of: threshold) { _, _ in
+            editState.syncThreshold(threshold)
+        }
+        .onChange(of: isThresholdTextFocused) { _, isFocused in
+            if !isFocused && editState.isEditing {
+                commitThresholdText()
+            }
+        }
+    }
+
+    private func beginThresholdTextEditing() {
+        editState.syncThreshold(threshold)
+        editState.beginEditing()
+        DispatchQueue.main.async {
+            isThresholdTextFocused = true
+        }
+    }
+
+    private func commitThresholdText() {
+        editState.commitCurrentText()
+        threshold = editState.threshold
+        isThresholdTextFocused = false
     }
 }
 

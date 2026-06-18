@@ -76,13 +76,23 @@ struct ContentView: View {
     private var scanView: some View {
         NavigationSplitView {
             SidebarView(model: model)
-                .navigationSplitViewColumnWidth(min: 220, ideal: 260, max: 320)
+                .navigationSplitViewColumnWidth(
+                    min: SplitColumnConfiguration.sidebar.minWidth,
+                    ideal: SplitColumnConfiguration.sidebar.idealWidth,
+                    max: SplitColumnConfiguration.sidebar.maxWidth ?? SplitColumnConfiguration.sidebar.idealWidth
+                )
         } content: {
             GroupDetailView(model: model)
-                .navigationSplitViewColumnWidth(min: 440, ideal: 590)
+                .navigationSplitViewColumnWidth(
+                    min: SplitColumnConfiguration.comparison.minWidth,
+                    ideal: SplitColumnConfiguration.comparison.idealWidth
+                )
         } detail: {
             InspectorView(model: model)
-                .navigationSplitViewColumnWidth(min: 280, ideal: 320, max: 390)
+                .navigationSplitViewColumnWidth(
+                    min: SplitColumnConfiguration.preview.minWidth,
+                    ideal: SplitColumnConfiguration.preview.idealWidth
+                )
         }
         .toolbar {
             ToolbarItemGroup {
