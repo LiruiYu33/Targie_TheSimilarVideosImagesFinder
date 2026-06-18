@@ -27,22 +27,18 @@ struct BrowseView: View {
     @Environment(\.appLanguage) private var language
 
     /// Fraction of total width given to the table (left side).
-    @State private var leftFraction: CGFloat = 0.65
+    @AppStorage(BrowseSplitLayout.storageKey) private var leftFraction = BrowseSplitLayout.defaultLeftFraction
 
     /// Fraction captured at the start of a drag — basis for translation deltas.
-    @State private var dragStartFraction: CGFloat?
+    @State private var dragStartFraction: Double?
 
     /// Track whether the user is currently dragging the divider.
     @State private var isDraggingDivider = false
 
-    /// Hard floors so neither pane can collapse to zero.
-    private let minLeftWidth: CGFloat = 80
-    private let minRightWidth: CGFloat = 80
-
     var body: some View {
         GeometryReader { geo in
             let totalWidth = geo.size.width
-            let leftWidth = clampedLeft(totalWidth: totalWidth)
+            let leftWidth = BrowseSplitLayout.leftWidth(totalWidth: totalWidth, leftFraction: leftFraction)
 
             HStack(spacing: 0) {
                 // ── Left: file table ──
@@ -59,9 +55,11 @@ struct BrowseView: View {
                                 isDraggingDivider = true
                                 let start = dragStartFraction ?? leftFraction
                                 if dragStartFraction == nil { dragStartFraction = start }
-                                let baseLeft = totalWidth * start
-                                let proposedLeft = baseLeft + value.translation.width
-                                leftFraction = clampedLeft(totalWidth: totalWidth, proposed: proposedLeft) / totalWidth
+                                leftFraction = BrowseSplitLayout.updatedFraction(
+                                    totalWidth: totalWidth,
+                                    startFraction: start,
+                                    translation: value.translation.width
+                                )
                             }
                             .onEnded { _ in
                                 isDraggingDivider = false
@@ -153,12 +151,5 @@ struct BrowseView: View {
             .frame(width: 1)
             .frame(width: 8)       // wider hit target for dragging
             .contentShape(Rectangle())
-    }
-
-    // MARK: - Helpers
-
-    private func clampedLeft(totalWidth: CGFloat, proposed: CGFloat? = nil) -> CGFloat {
-        let candidate = proposed ?? (totalWidth * leftFraction)
-        return max(minLeftWidth, min(totalWidth - minRightWidth, candidate))
     }
 }

@@ -42,6 +42,24 @@ final class ScanViewModelTests: XCTestCase {
         XCTAssertEqual(model.selectedFolders, [first, second])
     }
 
+    func testClearFoldersRemovesAllSelectedFolders() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ClearFolders-\(UUID().uuidString)", isDirectory: true)
+        let first = root.appendingPathComponent("first", isDirectory: true)
+        let second = root.appendingPathComponent("second", isDirectory: true)
+        try FileManager.default.createDirectory(at: first, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: second, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let model = ScanViewModel(hashCache: nil)
+        model.selectedFolders = [first, second]
+
+        let cleared = model.clearFolders()
+
+        XCTAssertTrue(cleared)
+        XCTAssertTrue(model.selectedFolders.isEmpty)
+    }
+
     func testVideoScanComparesFilesAcrossSelectedFolders() async throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("MultiFolderScan-\(UUID().uuidString)", isDirectory: true)

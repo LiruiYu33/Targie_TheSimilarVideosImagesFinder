@@ -37,87 +37,176 @@ struct SidebarView: View {
 
     private var controls: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Button(action: { model.chooseFolder(language: language) }) {
-                Label(L10n.addFolders(language), systemImage: "folder.badge.plus")
-                    .frame(maxWidth: .infinity)
+            ForEach(SidebarControlPlacement.primaryControls, id: \.self) { control in
+                primaryControl(control)
             }
-            .controlSize(.large)
-            .disabled(model.isScanning)
 
-            if model.selectedFolders.isEmpty {
-                Text(L10n.dragFoldersHint(language))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            } else {
-                Text(L10n.foldersSelected(model.selectedFolders.count, language))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-
-                ForEach(model.selectedFolders, id: \.self) { folder in
-                    HStack(spacing: 6) {
-                        Image(systemName: "folder")
-                            .foregroundStyle(.secondary)
-                        Text(folder.path)
-                            .font(.caption)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                            .help(folder.path)
-                        Spacer(minLength: 0)
-                        Button {
-                            model.removeFolder(folder)
-                        } label: {
-                            Image(systemName: "xmark.circle.fill")
-                        }
-                        .buttonStyle(.plain)
-                        .disabled(model.isScanning)
-                        .foregroundStyle(.secondary)
-                        .help(L10n.removeFolder(language))
+            if hasAuxiliaryControls {
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(SidebarControlPlacement.auxiliaryControls, id: \.self) { control in
+                        auxiliaryControl(control)
                     }
                 }
             }
+        }
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .padding(14)
+    }
 
-            if model.isScanning {
-                ProgressView(value: model.progress.fraction) {
-                    Text(L10n.scanStage(model.progress.stage, language))
-                } currentValueLabel: {
-                    Text(model.progress.currentFile)
-                        .lineLimit(1)
-                }
-                Button(L10n.cancelScan(language), role: .cancel, action: model.cancelScan)
-            } else {
-                Button(action: model.startScan) {
-                    Label(L10n.startScan(language), systemImage: "sparkle.magnifyingglass")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(model.selectedFolders.isEmpty)
+    private var hasAuxiliaryControls: Bool {
+        !model.selectedFolders.isEmpty || !model.issues.isEmpty
+    }
+
+    @ViewBuilder
+    private func primaryControl(_ control: SidebarControlKind) -> some View {
+        switch control {
+        case .addFolders:
+            Button(action: { model.chooseFolder(language: language) }) {
+                sidebarActionLabel(L10n.addFolders(language), systemImage: "folder.badge.plus")
             }
+            .sidebarActionButtonShape()
+            .disabled(model.isScanning)
 
+        case .clearFolders:
+            Button {
+                model.clearFolders()
+            } label: {
+                sidebarActionLabel(L10n.clearFolders(language), systemImage: "folder.badge.minus")
+            }
+            .sidebarActionButtonShape()
+            .disabled(model.isScanning || model.selectedFolders.isEmpty)
+
+        case .folderStatus:
+            folderStatus
+
+        case .scanAction:
+            scanAction
+
+        case .displayThreshold:
             DisplayThresholdControl(threshold: $model.threshold, language: language)
 
-            if !model.issues.isEmpty {
-                Button { showSkippedFiles.toggle() } label: {
-                    Label(L10n.skippedFiles(model.issues.count, language), systemImage: "exclamationmark.triangle")
-                        .font(.caption)
-                        .foregroundStyle(.orange)
-                }
-                .buttonStyle(.plain)
-                .popover(isPresented: $showSkippedFiles) {
-                    SkippedFilesList(issues: model.issues, language: language)
+        case .selectedFolderList, .skippedFiles:
+            EmptyView()
+        }
+    }
+
+    private var folderStatus: some View {
+        Group {
+            if model.selectedFolders.isEmpty {
+                Text(L10n.dragFoldersHint(language))
+            } else {
+                Text(L10n.foldersSelected(model.selectedFolders.count, language))
+            }
+        }
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .lineLimit(SidebarControlPlacement.folderStatusLineLimit)
+        .minimumScaleFactor(0.75)
+        .truncationMode(.tail)
+        .frame(
+            maxWidth: .infinity,
+            alignment: .leading
+        )
+    }
+
+    @ViewBuilder
+    private var scanAction: some View {
+        if model.isScanning {
+            ProgressView(value: model.progress.fraction) {
+                Text(L10n.scanStage(model.progress.stage, language))
+            } currentValueLabel: {
+                Text(model.progress.currentFile)
+                    .lineLimit(1)
+            }
+            Button(L10n.cancelScan(language), role: .cancel, action: model.cancelScan)
+        } else {
+            Button(action: model.startScan) {
+                sidebarActionLabel(L10n.startScan(language), systemImage: "sparkle.magnifyingglass")
+            }
+            .buttonStyle(.borderedProminent)
+            .sidebarActionButtonShape()
+            .disabled(model.selectedFolders.isEmpty)
+        }
+    }
+
+    private func sidebarActionLabel(_ title: String, systemImage: String) -> some View {
+        Label(title, systemImage: systemImage)
+            .frame(maxWidth: .infinity)
+    }
+
+    @ViewBuilder
+    private func auxiliaryControl(_ control: SidebarControlKind) -> some View {
+        switch control {
+        case .selectedFolderList:
+            selectedFolderList
+        case .skippedFiles:
+            skippedFilesButton
+        case .addFolders, .clearFolders, .folderStatus, .scanAction, .displayThreshold:
+            EmptyView()
+        }
+    }
+
+    @ViewBuilder
+    private var selectedFolderList: some View {
+        if !model.selectedFolders.isEmpty {
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(model.selectedFolders, id: \.self) { folder in
+                    selectedFolderRow(folder)
                 }
             }
         }
-        .padding(14)
+    }
+
+    private func selectedFolderRow(_ folder: URL) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: "folder")
+                .foregroundStyle(.secondary)
+            Text(folder.path)
+                .font(.caption)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .help(folder.path)
+            Spacer(minLength: 0)
+            Button {
+                model.removeFolder(folder)
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+            }
+            .buttonStyle(.plain)
+            .disabled(model.isScanning)
+            .foregroundStyle(.secondary)
+            .help(L10n.removeFolder(language))
+        }
+    }
+
+    @ViewBuilder
+    private var skippedFilesButton: some View {
+        if !model.issues.isEmpty {
+            Button { showSkippedFiles.toggle() } label: {
+                Label(L10n.skippedFiles(model.issues.count, language), systemImage: "exclamationmark.triangle")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            }
+            .buttonStyle(.plain)
+            .popover(isPresented: $showSkippedFiles) {
+                SkippedFilesList(issues: model.issues, language: language)
+            }
+        }
     }
 
     @ViewBuilder
     private var groupList: some View {
         if model.groups.isEmpty {
-            ContentUnavailableView(
-                model.progress.stage == .completed ? L10n.noSimilarMedia(language) : L10n.waitingToScan(language),
-                systemImage: model.progress.stage == .completed ? "checkmark.circle" : "photo.stack",
-                description: Text(model.progress.stage == .completed ? L10n.lowerThresholdHint(language) : L10n.chooseAndScanHint(language))
-            )
+            VStack(spacing: 0) {
+                ContentUnavailableView(
+                    model.progress.stage == .completed ? L10n.noSimilarMedia(language) : L10n.waitingToScan(language),
+                    systemImage: model.progress.stage == .completed ? "checkmark.circle" : "photo.stack",
+                    description: Text(model.progress.stage == .completed ? L10n.lowerThresholdHint(language) : L10n.chooseAndScanHint(language))
+                )
+                .padding(.top, 24)
+                Spacer(minLength: 0)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         } else {
             List(selection: Binding(
                 get: { model.selectedGroupID },
@@ -149,6 +238,12 @@ struct SidebarView: View {
             }
             .tag(group.id)
         }
+    }
+}
+
+private extension View {
+    func sidebarActionButtonShape() -> some View {
+        controlSize(.large)
     }
 }
 

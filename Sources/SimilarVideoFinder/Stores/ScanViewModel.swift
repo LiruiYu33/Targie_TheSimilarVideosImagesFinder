@@ -151,6 +151,14 @@ final class ScanViewModel: ObservableObject {
         resetResults()
     }
 
+    @discardableResult
+    func clearFolders() -> Bool {
+        guard !isScanning, !selectedFolders.isEmpty else { return false }
+        selectedFolders.removeAll()
+        resetResults()
+        return true
+    }
+
     func startScan() {
         guard !selectedFolders.isEmpty, !isScanning else { return }
         let folders = selectedFolders
