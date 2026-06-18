@@ -118,7 +118,10 @@ struct SidebarView: View {
                 Text(model.progress.currentFile)
                     .lineLimit(1)
             }
-            Button(L10n.cancelScan(language), role: .cancel, action: model.cancelScan)
+            Button(role: .cancel, action: model.cancelScan) {
+                sidebarActionLabel(L10n.cancelScan(language), systemImage: "xmark")
+            }
+            .sidebarActionButtonShape()
         } else {
             Button(action: model.startScan) {
                 sidebarActionLabel(L10n.startScan(language), systemImage: "sparkle.magnifyingglass")
