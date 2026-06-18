@@ -48,7 +48,7 @@ enum PresentedError {
 
 @MainActor
 final class ScanViewModel: ObservableObject {
-    static let displayThresholdRange = 0.60...1.0
+    static let displayThresholdRange = DisplayThresholdEditing.allowedRange
 
     @Published var selectedFolders: [URL] = []
     @Published var threshold = 0.88 {
@@ -149,6 +149,14 @@ final class ScanViewModel: ObservableObject {
         guard selectedFolders.contains(where: { $0.standardizedFileURL.path == path }) else { return }
         selectedFolders.removeAll { $0.standardizedFileURL.path == path }
         resetResults()
+    }
+
+    @discardableResult
+    func clearFolders() -> Bool {
+        guard !isScanning, !selectedFolders.isEmpty else { return false }
+        selectedFolders.removeAll()
+        resetResults()
+        return true
     }
 
     func startScan() {

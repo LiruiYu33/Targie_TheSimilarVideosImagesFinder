@@ -46,21 +46,14 @@ struct InspectorView: View {
                         }
 
                         HStack {
-                            if media.kind == .video {
-                                Button(L10n.openDefaultPlayer(language), action: model.openSelectedMedia)
+                            ForEach(
+                                PreviewActionArrangement.singleFileActions(includesOpenDefaultPlayer: media.kind == .video),
+                                id: \.self
+                            ) { action in
+                                actionButton(action, media: media)
                             }
-                            Button(L10n.showInFinder(language), action: model.revealSelectedMedia)
                         }
                         .controlSize(.small)
-
-                        Divider()
-                        Button(role: .destructive) {
-                            model.requestDeletion(of: media)
-                        } label: {
-                            Label(L10n.deleteMedia(language), systemImage: "trash")
-                                .frame(maxWidth: .infinity)
-                        }
-                        .buttonStyle(.bordered)
                     }
                     .padding(18)
                 }
@@ -79,6 +72,24 @@ struct InspectorView: View {
         VStack(alignment: .leading, spacing: 2) {
             Text(title).font(.caption).foregroundStyle(.secondary)
             Text(value).font(.callout).textSelection(.enabled)
+        }
+    }
+
+    @ViewBuilder
+    private func actionButton(_ action: PreviewActionKind, media: MediaItem) -> some View {
+        switch action {
+        case .openDefaultPlayer:
+            Button(L10n.openDefaultPlayer(language), action: model.openSelectedMedia)
+        case .showInFinder:
+            Button(L10n.showInFinder(language), action: model.revealSelectedMedia)
+        case .deleteFile:
+            Button(role: .destructive) {
+                model.requestDeletion(of: media)
+            } label: {
+                Label(L10n.deleteMedia(language), systemImage: "trash")
+            }
+        case .deleteSelection:
+            EmptyView()
         }
     }
 }

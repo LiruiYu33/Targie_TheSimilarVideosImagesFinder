@@ -47,21 +47,14 @@ struct BrowsePreviewPanel: View {
                         }
 
                         HStack {
-                            if media.kind == .video {
-                                Button(L10n.openDefaultPlayer(language)) { browseModel.scanModel.openMedia(media) }
+                            ForEach(
+                                PreviewActionArrangement.singleFileActions(includesOpenDefaultPlayer: media.kind == .video),
+                                id: \.self
+                            ) { action in
+                                actionButton(action, media: media)
                             }
-                            Button(L10n.showInFinder(language)) { browseModel.scanModel.revealMedia(media) }
                         }
                         .controlSize(.small)
-
-                        Divider()
-                        Button(role: .destructive) {
-                            browseModel.scanModel.requestDeletion(of: media)
-                        } label: {
-                            Label(L10n.deleteMedia(language), systemImage: "trash")
-                                .frame(maxWidth: .infinity)
-                        }
-                        .buttonStyle(.bordered)
                     }
                     .padding(18)
                 }
@@ -80,6 +73,24 @@ struct BrowsePreviewPanel: View {
         VStack(alignment: .leading, spacing: 2) {
             Text(title).font(.caption).foregroundStyle(.secondary)
             Text(value).font(.callout).textSelection(.enabled)
+        }
+    }
+
+    @ViewBuilder
+    private func actionButton(_ action: PreviewActionKind, media: MediaItem) -> some View {
+        switch action {
+        case .openDefaultPlayer:
+            Button(L10n.openDefaultPlayer(language)) { browseModel.scanModel.openMedia(media) }
+        case .showInFinder:
+            Button(L10n.showInFinder(language)) { browseModel.scanModel.revealMedia(media) }
+        case .deleteFile:
+            Button(role: .destructive) {
+                browseModel.scanModel.requestDeletion(of: media)
+            } label: {
+                Label(L10n.deleteMedia(language), systemImage: "trash")
+            }
+        case .deleteSelection:
+            EmptyView()
         }
     }
 }
@@ -125,13 +136,8 @@ struct BrowseStackedPreview: View {
                 }
 
                 HStack {
-                    if let first = selectedItems.first {
-                        Button(L10n.showInFinder(language)) { browseModel.scanModel.revealMedia(first) }
-                    }
-                    Button(role: .destructive) {
-                        browseModel.scanModel.requestDeletion(of: selectedItems)
-                    } label: {
-                        Label(L10n.deleteSelected(selectedItems.count, language), systemImage: "trash")
+                    ForEach(PreviewActionArrangement.multipleSelectionActions(), id: \.self) { action in
+                        actionButton(action)
                     }
                 }
                 .controlSize(.small)
@@ -175,6 +181,24 @@ struct BrowseStackedPreview: View {
         VStack(alignment: .leading, spacing: 2) {
             Text(title).font(.caption).foregroundStyle(.secondary)
             Text(value).font(.callout).textSelection(.enabled)
+        }
+    }
+
+    @ViewBuilder
+    private func actionButton(_ action: PreviewActionKind) -> some View {
+        switch action {
+        case .showInFinder:
+            if let first = selectedItems.first {
+                Button(L10n.showInFinder(language)) { browseModel.scanModel.revealMedia(first) }
+            }
+        case .deleteSelection:
+            Button(role: .destructive) {
+                browseModel.scanModel.requestDeletion(of: selectedItems)
+            } label: {
+                Label(L10n.deleteSelected(selectedItems.count, language), systemImage: "trash")
+            }
+        case .openDefaultPlayer, .deleteFile:
+            EmptyView()
         }
     }
 }
