@@ -53,7 +53,23 @@ final class DeletionService: DeletionServicing {
         do {
             switch mode {
             case .trash:
-                _ = try FileManager.default.trashItem(at: url, resultingItemURL: nil)
+                let resolved = url.standardizedFileURL
+                var coordinatorError: NSError?
+                var trashError: Error?
+                NSFileCoordinator(filePresenter: nil).coordinate(writingItemAt: resolved, options: .forDeleting, error: &coordinatorError) { coordinatedURL in
+                    do {
+                        var resultingURL: NSURL?
+                        try FileManager.default.trashItem(at: coordinatedURL, resultingItemURL: &resultingURL)
+                    } catch {
+                        trashError = error
+                    }
+                }
+                if let error = coordinatorError {
+                    throw DeletionError.operationFailed(error.localizedDescription)
+                }
+                if let error = trashError {
+                    throw DeletionError.operationFailed(error.localizedDescription)
+                }
             case .permanent:
                 try FileManager.default.removeItem(at: url)
             }
