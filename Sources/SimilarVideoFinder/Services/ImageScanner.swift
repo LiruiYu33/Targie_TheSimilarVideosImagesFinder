@@ -17,15 +17,18 @@ struct ImageScanner: Sendable {
         "jpg", "jpeg", "png", "heic", "heif", "webp", "tif", "tiff", "gif", "bmp"
     ]
 
-    private let maxConcurrentLoads: Int
-    private let loader: ImageLoader
+    let maxConcurrentLoads: Int
+    let loader: ImageLoader
+    let metadataCache: (any HashCaching)?
 
     init(
         maxConcurrentLoads: Int = min(4, max(2, ProcessInfo.processInfo.activeProcessorCount / 2)),
         thumbnailStore: ThumbnailStore = .shared,
+        metadataCache: (any HashCaching)? = nil,
         loader: ImageLoader? = nil
     ) {
         self.maxConcurrentLoads = max(1, maxConcurrentLoads)
+        self.metadataCache = metadataCache
         self.loader = loader ?? { url in try Self.loadImage(at: url, thumbnailStore: thumbnailStore) }
     }
 
@@ -126,6 +129,21 @@ struct ImageScanner: Sendable {
             kCGImageSourceThumbnailMaxPixelSize: 720,
             kCGImageSourceShouldCacheImmediately: true
         ]
+        // Reuse a persisted thumbnail if one exists for this (path, modifiedAt)
+        // — avoids re-decoding and re-downscaling the image on re-scan.
+        if let existingURL = thumbnailStore.existingThumbnailURL(for: url, modifiedAt: values.contentModificationDate) {
+            return MediaItem(
+                kind: .image,
+                url: url,
+                fileSize: Int64(values.fileSize ?? 0),
+                duration: nil,
+                width: width,
+                height: height,
+                modifiedAt: values.contentModificationDate,
+                thumbnailData: nil,
+                thumbnailURL: existingURL
+            )
+        }
         guard let thumbnail = CGImageSourceCreateThumbnailAtIndex(source, 0, thumbnailOptions as CFDictionary) else {
             throw ImageScannerError.unreadableImage
         }
