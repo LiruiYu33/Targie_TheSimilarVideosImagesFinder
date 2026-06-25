@@ -38,10 +38,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 @main
 struct SimilarVideoFinderApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+    /// Owned at the App level so state survives window close (Cmd+W).
+    @StateObject private var scanModel = ScanViewModel()
 
     var body: some Scene {
         WindowGroup(AppIdentity.displayName) {
-            ContentView()
+            ContentView(model: scanModel)
                 .frame(minWidth: 960, minHeight: 600)
         }
         .defaultSize(width: 1180, height: 720)

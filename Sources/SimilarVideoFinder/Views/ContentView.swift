@@ -22,7 +22,7 @@
 import SwiftUI
 
 struct ContentView: View {
-    @StateObject private var model = ScanViewModel()
+    @ObservedObject var model: ScanViewModel
     @AppStorage("appLanguage") private var languageRawValue = AppLanguage.defaultLanguage.rawValue
     @AppStorage("scanMode") private var scanModeRawValue = ScanMode.all.rawValue
 
