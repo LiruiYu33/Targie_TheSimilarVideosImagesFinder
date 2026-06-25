@@ -98,6 +98,12 @@ protocol HashCaching: Sendable {
     // phase skips Vision neural-network inference on re-scan.
     func upsertImageFeature(filePath: String, fileSize: Int64, modifiedAt: Date?, featureData: Data) async
     func lookupImageFeature(filePath: String, fileSize: Int64, modifiedAt: Date?) async -> Data?
+
+    /// Returns the previous path of a file that was moved, if one can be found
+    /// in the cache. Read-only — does NOT update the path; the caller is
+    /// responsible for migrating other caches (e.g. thumbnails) using the
+    /// returned old path.
+    func detectMove(filePath: String, fileSize: Int64, modifiedAt: Date?, mediaKind: MediaKind, algorithmVersion: String) async -> String?
 }
 
 extension HashCaching {
@@ -113,6 +119,7 @@ extension HashCaching {
 
     func upsertImageFeature(filePath: String, fileSize: Int64, modifiedAt: Date?, featureData: Data) async {}
     func lookupImageFeature(filePath: String, fileSize: Int64, modifiedAt: Date?) async -> Data? { nil }
+    func detectMove(filePath: String, fileSize: Int64, modifiedAt: Date?, mediaKind: MediaKind, algorithmVersion: String) async -> String? { nil }
 }
 
 // MARK: - HashCache
@@ -198,6 +205,27 @@ actor HashCache: HashCaching {
             mediaKind: candidate.mediaKind,
             algorithmVersion: candidate.algorithmVersion
         )
+    }
+
+    // MARK: - Move Detection (read-only, for thumbnail migration)
+
+    /// Read-only variant of move detection: returns the old path of a moved file
+    /// WITHOUT updating any cache record.  Queries `media_metadata` (which has
+    /// entries for *every* scanned file, not just those in candidate pairs) so
+    /// thumbnail migration covers all files — not just similar ones.
+    /// `algorithmVersion` is ignored (metadata table has no concept of version);
+    /// kept on the protocol for source compatibility.
+    func detectMove(filePath: String, fileSize: Int64, modifiedAt: Date?, mediaKind: MediaKind, algorithmVersion: String) -> String? {
+        guard let candidate = try? dbQueue.read({ db in
+            try MediaMetadata
+                .filter(Column("fileSize") == fileSize)
+                .filter(Column("mediaKind") == mediaKind.rawValue)
+                .filter(Column("filePath") != filePath)
+                .fetchOne(db)
+        }), modifiedAtMatches(candidate.modifiedAt, modifiedAt) else { return nil }
+
+        guard !FileManager.default.fileExists(atPath: candidate.filePath) else { return nil }
+        return candidate.filePath
     }
 
     func upsert(_ record: CacheRecord) {
@@ -567,4 +595,6 @@ actor InMemoryHashCache: HashCaching {
     func lookupImageFeature(filePath: String, fileSize: Int64, modifiedAt: Date?) async -> Data? {
         imageFeatures[filePath]
     }
+
+    func detectMove(filePath: String, fileSize: Int64, modifiedAt: Date?, mediaKind: MediaKind, algorithmVersion: String) -> String? { nil }
 }

@@ -33,31 +33,33 @@ struct ThumbnailStore: Sendable {
     /// Returns the persisted thumbnail URL for `sourceURL` if one already exists
     /// on disk, without generating anything. Lets scanners skip the expensive
     /// thumbnail generation (video frame decode / image downscale) on re-scan.
-    ///
-    /// When the primary path-based lookup misses (e.g. the file was moved to a
-    /// different folder), a secondary search by `modifiedAt` finds the old
-    /// thumbnail and migrates it to the new path — so moves don't invalidate
-    /// the thumbnail cache either.
     func existingThumbnailURL(for sourceURL: URL, modifiedAt: Date?) -> URL? {
         let expected = destinationURL(pathKey: pathKey(for: sourceURL), modifiedAt: modifiedAt)
-        if FileManager.default.fileExists(atPath: expected.path) { return expected }
+        return FileManager.default.fileExists(atPath: expected.path) ? expected : nil
+    }
 
-        // Move support: search by modifiedAt key (the _<hash> suffix) for a
-        // thumbnail that belongs to this file under its *previous* path.
-        let mKey = modifiedKey(for: modifiedAt)
-        guard let contents = try? FileManager.default.contentsOfDirectory(
-            at: directoryURL, includingPropertiesForKeys: nil
-        ) else { return nil }
+    /// Migrates a thumbnail from a known old path to the new source URL.
+    /// Called when `HashCache.detectMove` confirms the file was relocated.
+    /// Returns the new thumbnail URL on success, nil if the old thumbnail
+    /// doesn't exist or copy fails.
+    func migrateFromOldPath(_ oldPath: String, to newURL: URL, modifiedAt: Date?) -> URL? {
+        let oldPathKey = pathKey(for: URL(fileURLWithPath: oldPath))
+        let oldURL = directoryURL.appendingPathComponent("\(oldPathKey)_\(modifiedKey(for: modifiedAt)).jpg")
+        guard FileManager.default.fileExists(atPath: oldURL.path) else { return nil }
 
-        for url in contents where url.lastPathComponent.hasSuffix("_\(mKey).jpg") {
-            try? FileManager.default.copyItem(at: url, to: expected)
-            try? FileManager.default.removeItem(at: url)
-            if let data = try? Data(contentsOf: expected) {
-                ThumbnailDataCache.shared.insert(data, for: expected)
+        let destination = destinationURL(pathKey: pathKey(for: newURL), modifiedAt: modifiedAt)
+        guard !FileManager.default.fileExists(atPath: destination.path) else { return destination }
+
+        do {
+            try FileManager.default.copyItem(at: oldURL, to: destination)
+            try? FileManager.default.removeItem(at: oldURL)
+            if let data = try? Data(contentsOf: destination) {
+                ThumbnailDataCache.shared.insert(data, for: destination)
             }
-            return expected
+            return destination
+        } catch {
+            return nil
         }
-        return nil
     }
 
     /// Stable hash of the canonical source path — used as a prefix so we can

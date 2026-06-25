@@ -187,6 +187,17 @@ struct VideoScanner {
         if let existingURL {
             thumbnail = nil
             thumbnailURL = existingURL
+        } else if let cache = metadataCache,
+                  let oldPath = await cache.detectMove(
+                      filePath: url.path,
+                      fileSize: fileSize,
+                      modifiedAt: modifiedAt,
+                      mediaKind: .video,
+                      algorithmVersion: "video-dct3d-v1"
+                  ),
+                  let migrated = thumbnailStore.migrateFromOldPath(oldPath, to: url, modifiedAt: modifiedAt) {
+            thumbnail = nil
+            thumbnailURL = migrated
         } else {
             let asset = AVURLAsset(url: url)
             thumbnail = await thumbnailData(asset: asset, duration: duration)
