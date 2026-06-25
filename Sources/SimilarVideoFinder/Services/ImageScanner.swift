@@ -29,7 +29,7 @@ struct ImageScanner: Sendable {
     ) {
         self.maxConcurrentLoads = max(1, maxConcurrentLoads)
         self.metadataCache = metadataCache
-        self.loader = loader ?? { url in try Self.loadImage(at: url, thumbnailStore: thumbnailStore) }
+        self.loader = loader ?? { url in try await Self.loadImage(at: url, thumbnailStore: thumbnailStore, metadataCache: metadataCache) }
     }
 
     static func discoverImageURLs(in folder: URL) throws -> [URL] {
@@ -107,7 +107,7 @@ struct ImageScanner: Sendable {
         }
     }
 
-    private static func loadImage(at url: URL, thumbnailStore: ThumbnailStore) throws -> MediaItem {
+    private static func loadImage(at url: URL, thumbnailStore: ThumbnailStore, metadataCache: (any HashCaching)?) async throws -> MediaItem {
         let values = try url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
         guard let source = CGImageSourceCreateWithURL(url as CFURL, [
             kCGImageSourceShouldCache: false
@@ -122,6 +122,20 @@ struct ImageScanner: Sendable {
         let swapsDimensions = [5, 6, 7, 8].contains(orientation)
         let width = swapsDimensions ? rawHeight.intValue : rawWidth.intValue
         let height = swapsDimensions ? rawWidth.intValue : rawHeight.intValue
+
+        // Store minimal metadata so `detectMove` can locate the old path when
+        // this image is later moved to a different folder.
+        if let cache = metadataCache {
+            await cache.upsertMetadata(
+                filePath: url.path,
+                fileSize: Int64(values.fileSize ?? 0),
+                modifiedAt: values.contentModificationDate,
+                mediaKind: .image,
+                duration: nil,
+                width: width,
+                height: height
+            )
+        }
 
         let thumbnailOptions: [CFString: Any] = [
             kCGImageSourceCreateThumbnailFromImageAlways: true,
@@ -142,6 +156,35 @@ struct ImageScanner: Sendable {
                 modifiedAt: values.contentModificationDate,
                 thumbnailData: nil,
                 thumbnailURL: existingURL
+            )
+        }
+        // Move detection: the file may have been relocated from another folder.
+        // Ask HashCache for the old path and migrate the thumbnail precisely
+        // (avoids the race condition of a fuzzy modifiedAt scan).
+        let migratedURL: URL?
+        if let cache = metadataCache,
+           let oldPath = await cache.detectMove(
+               filePath: url.path,
+               fileSize: Int64(values.fileSize ?? 0),
+               modifiedAt: values.contentModificationDate,
+               mediaKind: .image,
+               algorithmVersion: ImageSimilarityPipeline.algorithmVersion
+           ) {
+            migratedURL = thumbnailStore.migrateFromOldPath(oldPath, to: url, modifiedAt: values.contentModificationDate)
+        } else {
+            migratedURL = nil
+        }
+        if let migratedURL {
+            return MediaItem(
+                kind: .image,
+                url: url,
+                fileSize: Int64(values.fileSize ?? 0),
+                duration: nil,
+                width: width,
+                height: height,
+                modifiedAt: values.contentModificationDate,
+                thumbnailData: nil,
+                thumbnailURL: migratedURL
             )
         }
         guard let thumbnail = CGImageSourceCreateThumbnailAtIndex(source, 0, thumbnailOptions as CFDictionary) else {
