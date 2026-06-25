@@ -125,12 +125,18 @@ final class ScanViewModel: ObservableObject {
         deletionService: any DeletionServicing = DeletionService(),
         hashCache: (any HashCaching)? = ScanViewModel.makeDefaultHashCache()
     ) {
-        self.scanner = scanner
-        self.imageScanner = imageScanner
         self.deletionService = deletionService
         self.hashCache = hashCache
         self.pipeline = pipeline ?? SimilarityPipeline(cache: hashCache)
         self.imagePipeline = ImageSimilarityPipeline(cache: hashCache)
+        // Use caller-provided scanners, but if they used the default (no-cache)
+        // ones, replace with cache-equipped versions so re-scan skips AVFoundation.
+        self.scanner = scanner.metadataCache == nil
+            ? VideoScanner(maxConcurrentLoads: scanner.maxConcurrentLoads, thumbnailStore: .shared, metadataCache: hashCache, loader: scanner.loader)
+            : scanner
+        self.imageScanner = imageScanner.metadataCache == nil
+            ? ImageScanner(maxConcurrentLoads: imageScanner.maxConcurrentLoads, thumbnailStore: .shared, metadataCache: hashCache, loader: imageScanner.loader)
+            : imageScanner
     }
 
     private static func makeDefaultHashCache() -> (any HashCaching)? {
@@ -485,6 +491,23 @@ final class ScanViewModel: ObservableObject {
 
     func revealMedia(_ media: MediaItem) { deletionService.reveal(media.url) }
     func openMedia(_ media: MediaItem) { deletionService.open(media.url) }
+
+    /// Returns the current cache footprint in human-readable size strings so the
+    /// UI can show users what they'd be deleting.
+    func cacheStats() async -> (thumbnailMB: String, hashMB: String) {
+        let tb = Double(ThumbnailStore.shared.totalSize()) / 1_048_576
+        let hb = Double(await hashCache?.sizeInBytes() ?? 0) / 1_048_576
+        return (String(format: tb < 1 ? "%.1f" : "%.0f", tb),
+                String(format: hb < 1 ? "%.1f" : "%.0f", hb))
+    }
+
+    /// Clears both the on-disk thumbnail cache and the perceptual-hash cache.
+    /// The next scan re-derives everything, so it'll be slower — used by the
+    /// "Clear Cache" button in Browse.
+    func clearAllCaches() async {
+        try? ThumbnailStore.shared.clearAll()
+        await hashCache?.clearAll()
+    }
 
     /// Remove a media item from allItems (and related relations/groups).
     /// Used after deletion from Browse mode.

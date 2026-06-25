@@ -35,16 +35,21 @@ struct VideoScanner {
         "mp4", "mov", "m4v", "avi", "mkv", "webm", "mpeg", "mpg", "3gp"
     ]
 
-    private let maxConcurrentLoads: Int
-    private let loader: VideoLoader
+    let maxConcurrentLoads: Int
+    let loader: VideoLoader
+    let metadataCache: (any HashCaching)?
 
     init(
         maxConcurrentLoads: Int = min(4, max(2, ProcessInfo.processInfo.activeProcessorCount / 2)),
         thumbnailStore: ThumbnailStore = .shared,
+        metadataCache: (any HashCaching)? = nil,
         loader: VideoLoader? = nil
     ) {
         self.maxConcurrentLoads = max(1, maxConcurrentLoads)
-        self.loader = loader ?? { url in try await Self.loadVideo(at: url, thumbnailStore: thumbnailStore) }
+        self.metadataCache = metadataCache
+        self.loader = loader ?? { url in try await Self.loadVideo(
+            at: url, thumbnailStore: thumbnailStore, metadataCache: metadataCache
+        ) }
     }
 
     static func discoverVideoURLs(in folder: URL) throws -> [URL] {
@@ -117,9 +122,31 @@ struct VideoScanner {
         }
     }
 
-    private static func loadVideo(at url: URL, thumbnailStore: ThumbnailStore) async throws -> MediaItem {
+    private static func loadVideo(
+        at url: URL,
+        thumbnailStore: ThumbnailStore,
+        metadataCache: (any HashCaching)?
+    ) async throws -> MediaItem {
         try Task.checkCancellation()
         let values = try url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
+        let fileSize = Int64(values.fileSize ?? 0)
+        let modifiedAt = values.contentModificationDate
+
+        // Metadata cache hit: skip all AVFoundation I/O.
+        if let cache = metadataCache,
+           let meta = await cache.lookupMetadata(
+               filePath: url.path, fileSize: fileSize,
+               modifiedAt: modifiedAt, mediaKind: .video
+           ),
+           let duration = meta.duration, let width = meta.width, let height = meta.height
+        {
+            return try await finishLoadVideo(
+                url: url, fileSize: fileSize, modifiedAt: modifiedAt,
+                duration: duration, width: width, height: height,
+                thumbnailStore: thumbnailStore, metadataCache: cache
+            )
+        }
+
         let asset = AVURLAsset(url: url)
         let duration = try await asset.load(.duration).seconds
         try Task.checkCancellation()
@@ -131,18 +158,50 @@ struct VideoScanner {
         let transformed = naturalSize.applying(transform)
         let width = Int(abs(transformed.width).rounded())
         let height = Int(abs(transformed.height).rounded())
-        let thumbnail = await thumbnailData(asset: asset, duration: duration)
-        let thumbnailURL = thumbnail.flatMap {
-            try? thumbnailStore.persist($0, sourceURL: url, modifiedAt: values.contentModificationDate)
+
+        // Cache the metadata so the next re-scan skips AVFoundation entirely.
+        if let cache = metadataCache {
+            await cache.upsertMetadata(
+                filePath: url.path, fileSize: fileSize, modifiedAt: modifiedAt,
+                mediaKind: .video, duration: duration, width: width, height: height
+            )
+        }
+        return try await finishLoadVideo(
+            url: url, fileSize: fileSize, modifiedAt: modifiedAt,
+            duration: duration, width: width, height: height,
+            thumbnailStore: thumbnailStore, metadataCache: metadataCache
+        )
+    }
+    /// Common tail — thumbnail lookup + MediaItem assembly — shared by the
+    /// cache-hit and cache-miss paths in `loadVideo`.
+    private static func finishLoadVideo(
+        url: URL, fileSize: Int64, modifiedAt: Date?,
+        duration: Double, width: Int, height: Int,
+        thumbnailStore: ThumbnailStore, metadataCache: (any HashCaching)?
+    ) async throws -> MediaItem {
+        // Reuse a persisted thumbnail if one exists for this (path, modifiedAt)
+        // — avoids the expensive AVAssetImageGenerator frame decode on re-scan.
+        let existingURL = thumbnailStore.existingThumbnailURL(for: url, modifiedAt: modifiedAt)
+        let thumbnail: Data?
+        let thumbnailURL: URL?
+        if let existingURL {
+            thumbnail = nil
+            thumbnailURL = existingURL
+        } else {
+            let asset = AVURLAsset(url: url)
+            thumbnail = await thumbnailData(asset: asset, duration: duration)
+            thumbnailURL = thumbnail.flatMap {
+                try? thumbnailStore.persist($0, sourceURL: url, modifiedAt: modifiedAt)
+            }
         }
         return MediaItem(
             kind: .video,
             url: url,
-            fileSize: Int64(values.fileSize ?? 0),
+            fileSize: fileSize,
             duration: duration,
             width: width,
             height: height,
-            modifiedAt: values.contentModificationDate,
+            modifiedAt: modifiedAt,
             thumbnailData: thumbnailURL == nil ? thumbnail : nil,
             thumbnailURL: thumbnailURL
         )

@@ -42,6 +42,22 @@ struct CacheRecord: Codable, Sendable, FetchableRecord, PersistableRecord {
     static var databaseTableName: String { "hash_cache" }
 }
 
+// MARK: - MediaMetadata (avoids re-reading AVFoundation on re-scan)
+
+/// Cached video/image metadata so `loadVideo`/`loadImage` can skip AVFoundation /
+/// CGImageSource calls when re-scanning the same file.
+struct MediaMetadata: Codable, Sendable, FetchableRecord, PersistableRecord {
+    var filePath: String    // PRIMARY KEY
+    var fileSize: Int64
+    var modifiedAt: Date?
+    var duration: Double?
+    var width: Int?
+    var height: Int?
+    var mediaKind: String
+
+    static var databaseTableName: String { "media_metadata" }
+}
+
 // MARK: - HashCache Protocol
 
 /// 缓存接口 — 通过协议化便于测试时注入 InMemory 替身。
@@ -50,13 +66,23 @@ protocol HashCaching: Sendable {
     func upsert(_ record: CacheRecord) async
     func pruneStale(validPaths: Set<String>) async
     func count() async -> Int
+    func clearAll() async
+    func sizeInBytes() async -> Int64
     func lookup(filePath: String, fileSize: Int64, modifiedAt: Date?, mediaKind: MediaKind, algorithmVersion: String) async -> CacheRecord?
+
+    // Metadata cache — lets loadVideo / loadImage skip AVFoundation re-read on
+    // re-scan when the file hasn't changed.
+    func upsertMetadata(filePath: String, fileSize: Int64, modifiedAt: Date?, mediaKind: MediaKind, duration: Double?, width: Int?, height: Int?) async
+    func lookupMetadata(filePath: String, fileSize: Int64, modifiedAt: Date?, mediaKind: MediaKind) async -> (duration: Double?, width: Int?, height: Int?)?
 }
 
 extension HashCaching {
     func lookup(filePath: String, fileSize: Int64, modifiedAt: Date?) async -> CacheRecord? {
         await lookup(filePath: filePath, fileSize: fileSize, modifiedAt: modifiedAt, mediaKind: .video, algorithmVersion: "video-dct3d-v1")
     }
+
+    func upsertMetadata(filePath: String, fileSize: Int64, modifiedAt: Date?, mediaKind: MediaKind, duration: Double?, width: Int?, height: Int?) async {}
+    func lookupMetadata(filePath: String, fileSize: Int64, modifiedAt: Date?, mediaKind: MediaKind) async -> (duration: Double?, width: Int?, height: Int?)? { nil }
 }
 
 // MARK: - HashCache
@@ -123,6 +149,52 @@ actor HashCache: HashCaching {
         (try? dbQueue.read { db in try CacheRecord.fetchCount(db) }) ?? 0
     }
 
+    /// Deletes every cached perceptual hash and metadata. Next scan re-derives them.
+    func clearAll() {
+        try? dbQueue.write { db in
+            try db.execute(sql: "DELETE FROM hash_cache")
+            try db.execute(sql: "DELETE FROM media_metadata")
+        }
+    }
+
+    func upsertMetadata(filePath: String, fileSize: Int64, modifiedAt: Date?, mediaKind: MediaKind, duration: Double?, width: Int?, height: Int?) {
+        try? dbQueue.write { db in
+            let record = MediaMetadata(
+                filePath: filePath,
+                fileSize: fileSize,
+                modifiedAt: modifiedAt,
+                duration: duration,
+                width: width,
+                height: height,
+                mediaKind: mediaKind.rawValue
+            )
+            try record.save(db)
+        }
+    }
+
+    func lookupMetadata(filePath: String, fileSize: Int64, modifiedAt: Date?, mediaKind: MediaKind) -> (duration: Double?, width: Int?, height: Int?)? {
+        try? dbQueue.read { db in
+            guard let record = try MediaMetadata
+                .filter(Column("filePath") == filePath)
+                .filter(Column("fileSize") == fileSize)
+                .filter(Column("mediaKind") == mediaKind.rawValue)
+                .fetchOne(db)
+            else { return nil }
+
+            // modifiedAt must match (both nil or within 1 second)
+            if let a = record.modifiedAt, let b = modifiedAt {
+                guard abs(a.timeIntervalSince(b)) < 1.0 else { return nil }
+            } else if record.modifiedAt != nil || modifiedAt != nil {
+                return nil
+            }
+            return (record.duration, record.width, record.height)
+        }
+    }
+
+    func sizeInBytes() -> Int64 {
+        Int64((try? databaseURL.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
+    }
+
     // MARK: - Migrations
 
     private static func runMigrations(on dbQueue: DatabaseQueue) throws {
@@ -144,6 +216,17 @@ actor HashCache: HashCaching {
             try db.alter(table: "hash_cache") { table in
                 table.add(column: "mediaKind", .text).notNull().defaults(to: MediaKind.video.rawValue)
                 table.add(column: "algorithmVersion", .text).notNull().defaults(to: "video-dct3d-v1")
+            }
+        }
+        migrator.registerMigration("v3_media_metadata") { db in
+            try db.create(table: "media_metadata") { t in
+                t.primaryKey("filePath", .text)
+                t.column("fileSize", .integer).notNull()
+                t.column("modifiedAt", .datetime)
+                t.column("duration", .double)
+                t.column("width", .integer)
+                t.column("height", .integer)
+                t.column("mediaKind", .text).notNull()
             }
         }
         try migrator.migrate(dbQueue)
@@ -209,6 +292,7 @@ extension CacheRecord {
 /// 测试用纯内存缓存替身, 与 SQLite 缓存接口一致。
 actor InMemoryHashCache: HashCaching {
     private var storage: [String: CacheRecord] = [:]
+    private var metadata: [String: (duration: Double?, width: Int?, height: Int?)] = [:]
 
     func lookup(filePath: String, fileSize: Int64, modifiedAt: Date?, mediaKind: MediaKind, algorithmVersion: String) -> CacheRecord? {
         guard let record = storage[filePath] else { return nil }
@@ -226,7 +310,20 @@ actor InMemoryHashCache: HashCaching {
 
     func pruneStale(validPaths: Set<String>) {
         storage = storage.filter { validPaths.contains($0.key) }
+        metadata = metadata.filter { validPaths.contains($0.key) }
     }
 
     func count() -> Int { storage.count }
+
+    func clearAll() { storage.removeAll(); metadata.removeAll() }
+
+    func sizeInBytes() -> Int64 { 0 }
+
+    func upsertMetadata(filePath: String, fileSize: Int64, modifiedAt: Date?, mediaKind: MediaKind, duration: Double?, width: Int?, height: Int?) async {
+        metadata[filePath] = (duration, width, height)
+    }
+
+    func lookupMetadata(filePath: String, fileSize: Int64, modifiedAt: Date?, mediaKind: MediaKind) async -> (duration: Double?, width: Int?, height: Int?)? {
+        metadata[filePath]
+    }
 }
