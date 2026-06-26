@@ -147,6 +147,9 @@ extension HashCaching {
 /// SQLite 持久化哈希缓存, 使用 GRDB.swift 实现。
 /// 数据库位置: ~/Library/Caches/Targie/hash_cache.sqlite
 actor HashCache: HashCaching {
+    private static let stalePruneTables = ["hash_cache", "media_metadata", "image_features"]
+    private static let pruneInsertBatchSize = 500
+
     private let dbQueue: DatabaseQueue
     private let databaseURL: URL
 
@@ -264,12 +267,43 @@ actor HashCache: HashCaching {
 
     func pruneStale(validPaths: Set<String>) {
         try? dbQueue.write { db in
-            for table in ["hash_cache", "media_metadata", "image_features"] {
-                let cachedPaths = try String.fetchAll(db, sql: "SELECT filePath FROM \(table)")
-                for stalePath in cachedPaths where !validPaths.contains(stalePath) {
-                    try db.execute(sql: "DELETE FROM \(table) WHERE filePath = ?", arguments: [stalePath])
+            guard !validPaths.isEmpty else {
+                for table in Self.stalePruneTables {
+                    try db.execute(sql: "DELETE FROM \(table)")
                 }
+                return
             }
+
+            try db.execute(sql: """
+                CREATE TEMP TABLE IF NOT EXISTS temp_valid_cache_paths (
+                    filePath TEXT PRIMARY KEY
+                )
+                """)
+            try db.execute(sql: "DELETE FROM temp_valid_cache_paths")
+
+            let allValidPaths = Array(validPaths)
+            for start in stride(from: 0, to: allValidPaths.count, by: Self.pruneInsertBatchSize) {
+                let end = min(start + Self.pruneInsertBatchSize, allValidPaths.count)
+                let chunk = allValidPaths[start..<end]
+                let placeholders = Array(repeating: "(?)", count: chunk.count).joined(separator: ", ")
+                try db.execute(
+                    sql: "INSERT OR IGNORE INTO temp_valid_cache_paths (filePath) VALUES \(placeholders)",
+                    arguments: StatementArguments(chunk)
+                )
+            }
+
+            for table in Self.stalePruneTables {
+                try db.execute(sql: """
+                    DELETE FROM \(table)
+                    WHERE NOT EXISTS (
+                        SELECT 1
+                        FROM temp_valid_cache_paths
+                        WHERE temp_valid_cache_paths.filePath = \(table).filePath
+                    )
+                    """)
+            }
+
+            try db.execute(sql: "DELETE FROM temp_valid_cache_paths")
         }
     }
 

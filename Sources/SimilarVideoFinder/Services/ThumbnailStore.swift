@@ -21,6 +21,7 @@ struct ThumbnailStore: Sendable {
         if let existing = try? FileManager.default.contentsOfDirectory(at: directoryURL, includingPropertiesForKeys: nil) {
             for url in existing where url.lastPathComponent.hasPrefix("\(pathKey)_") && url != destination {
                 try? FileManager.default.removeItem(at: url)
+                ThumbnailDataCache.shared.remove(url)
             }
         }
         if !FileManager.default.fileExists(atPath: destination.path) {
@@ -53,12 +54,28 @@ struct ThumbnailStore: Sendable {
         do {
             try FileManager.default.copyItem(at: oldURL, to: destination)
             try? FileManager.default.removeItem(at: oldURL)
+            ThumbnailDataCache.shared.remove(oldURL)
             if let data = try? Data(contentsOf: destination) {
                 ThumbnailDataCache.shared.insert(data, for: destination)
             }
             return destination
         } catch {
             return nil
+        }
+    }
+
+    /// Removes cached thumbnails whose source path is no longer part of the
+    /// current library scan.
+    func pruneStale(validSourceURLs: Set<URL>) throws {
+        guard FileManager.default.fileExists(atPath: directoryURL.path) else { return }
+        let validPathKeys = Set(validSourceURLs.map { pathKey(for: $0) })
+        let contents = try FileManager.default.contentsOfDirectory(at: directoryURL, includingPropertiesForKeys: nil)
+        for url in contents where url.pathExtension == "jpg" {
+            guard let pathKey = url.lastPathComponent.split(separator: "_", maxSplits: 1).first else { continue }
+            if !validPathKeys.contains(String(pathKey)) {
+                try? FileManager.default.removeItem(at: url)
+                ThumbnailDataCache.shared.remove(url)
+            }
         }
     }
 
@@ -139,6 +156,10 @@ private final class ThumbnailDataCache: @unchecked Sendable {
 
     func insert(_ data: Data, for url: URL) {
         cache.setObject(data as NSData, forKey: url as NSURL, cost: data.count)
+    }
+
+    func remove(_ url: URL) {
+        cache.removeObject(forKey: url as NSURL)
     }
 
     func removeAll() {

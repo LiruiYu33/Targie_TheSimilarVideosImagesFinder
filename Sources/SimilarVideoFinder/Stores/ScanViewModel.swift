@@ -117,25 +117,28 @@ final class ScanViewModel: ObservableObject {
     private let pipeline: any SimilarityProcessing
     private let deletionService: any DeletionServicing
     private let hashCache: (any HashCaching)?
+    private let thumbnailStore: ThumbnailStore
 
     init(
         scanner: VideoScanner = VideoScanner(),
         imageScanner: ImageScanner = ImageScanner(),
         pipeline: (any SimilarityProcessing)? = nil,
         deletionService: any DeletionServicing = DeletionService(),
-        hashCache: (any HashCaching)? = ScanViewModel.makeDefaultHashCache()
+        hashCache: (any HashCaching)? = ScanViewModel.makeDefaultHashCache(),
+        thumbnailStore: ThumbnailStore = .shared
     ) {
         self.deletionService = deletionService
         self.hashCache = hashCache
+        self.thumbnailStore = thumbnailStore
         self.pipeline = pipeline ?? SimilarityPipeline(cache: hashCache)
         self.imagePipeline = ImageSimilarityPipeline(cache: hashCache)
         // Use caller-provided scanners, but if they used the default (no-cache)
         // ones, replace with cache-equipped versions so re-scan skips AVFoundation.
         self.scanner = scanner.metadataCache == nil
-            ? VideoScanner(maxConcurrentLoads: scanner.maxConcurrentLoads, thumbnailStore: .shared, metadataCache: hashCache, loader: scanner.loader)
+            ? VideoScanner(maxConcurrentLoads: scanner.maxConcurrentLoads, thumbnailStore: thumbnailStore, metadataCache: hashCache, loader: scanner.loader)
             : scanner
         self.imageScanner = imageScanner.metadataCache == nil
-            ? ImageScanner(maxConcurrentLoads: imageScanner.maxConcurrentLoads, thumbnailStore: .shared, metadataCache: hashCache, loader: imageScanner.loader)
+            ? ImageScanner(maxConcurrentLoads: imageScanner.maxConcurrentLoads, thumbnailStore: thumbnailStore, metadataCache: hashCache, loader: imageScanner.loader)
             : imageScanner
     }
 
@@ -248,12 +251,7 @@ final class ScanViewModel: ObservableObject {
                 // so only the progress and cache cleanup remain here.
                 issues = scanIssues
                 progress = ScanProgress(stage: .completed, fraction: 1, discoveredCount: items.count)
-
-                // 清理缓存中已不存在的视频条目
-                if let hashCache {
-                    let validPaths = Set(items.map { $0.url.path })
-                    Task { await hashCache.pruneStale(validPaths: validPaths) }
-                }
+                pruneCaches(for: items)
             } catch is CancellationError {
                 progress = ScanProgress(stage: .cancelled)
             } catch {
@@ -326,6 +324,7 @@ final class ScanViewModel: ObservableObject {
                 allItems = items
                 issues = scanIssues
                 progress = ScanProgress(stage: .completed, fraction: 1, discoveredCount: items.count)
+                pruneCaches(for: items)
             } catch is CancellationError {
                 progress = ScanProgress(stage: .cancelled)
             } catch {
@@ -349,6 +348,19 @@ final class ScanViewModel: ObservableObject {
             sortedGroupItems = []
         }
         checkedMediaIDs.formIntersection(visibleItemIDs(for: mode))
+    }
+
+    private func pruneCaches(for items: [MediaItem]) {
+        let validPaths = Set(items.map { $0.url.path })
+        if let hashCache {
+            Task { await hashCache.pruneStale(validPaths: validPaths) }
+        }
+
+        let thumbnailStore = self.thumbnailStore
+        let validSourceURLs = Set(items.map(\.url))
+        Task.detached(priority: .utility) {
+            try? thumbnailStore.pruneStale(validSourceURLs: validSourceURLs)
+        }
     }
 
     private func kind(for mode: ScanMode) -> MediaKind? {

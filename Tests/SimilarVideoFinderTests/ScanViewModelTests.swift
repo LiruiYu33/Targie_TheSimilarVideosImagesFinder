@@ -647,6 +647,39 @@ final class ScanViewModelTests: XCTestCase {
         XCTAssertTrue(model.groups.isEmpty)
     }
 
+    func testDiscoverFilesPrunesHashCacheToDiscoveredPaths() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .resolvingSymlinksInPath()
+            .appendingPathComponent("DiscoverPrune-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let keepURL = root.appendingPathComponent("keep.mp4")
+        try Data([1]).write(to: keepURL)
+        let discoveredPath = try XCTUnwrap(VideoScanner.discoverVideoURLs(in: root).first).path
+        let cache = PruneRecordingCache()
+        let scanner = VideoScanner(maxConcurrentLoads: 1) { url in
+            MediaItem(
+                kind: .video,
+                url: url,
+                fileSize: 1,
+                duration: 1,
+                width: 16,
+                height: 9,
+                modifiedAt: nil,
+                thumbnailData: nil
+            )
+        }
+        let model = ScanViewModel(scanner: scanner, hashCache: cache)
+        model.selectedFolders = [root]
+
+        model.discoverFiles()
+        try await waitUntil { model.progress.stage == .completed }
+        try await waitUntilAsync { await cache.lastPrunedPaths() != nil }
+
+        let prunedPaths = await cache.lastPrunedPaths()
+        XCTAssertEqual(prunedPaths, [discoveredPath])
+    }
+
     private func waitUntil(
         timeoutIterations: Int = 200,
         condition: () -> Bool
@@ -656,6 +689,17 @@ final class ScanViewModelTests: XCTestCase {
             try await Task.sleep(for: .milliseconds(10))
         }
         XCTFail("Timed out waiting for scan state")
+    }
+
+    private func waitUntilAsync(
+        timeoutIterations: Int = 200,
+        condition: () async -> Bool
+    ) async throws {
+        for _ in 0..<timeoutIterations {
+            if await condition() { return }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTFail("Timed out waiting for async scan state")
     }
 }
 
@@ -700,4 +744,28 @@ private final class FakeDeletionService: DeletionServicing {
 
     func reveal(_ url: URL) {}
     func open(_ url: URL) {}
+}
+
+private actor PruneRecordingCache: HashCaching {
+    private var prunedPaths: Set<String>?
+
+    func lookup(filePath: String, fileSize: Int64, modifiedAt: Date?, mediaKind: MediaKind, algorithmVersion: String) -> CacheRecord? {
+        nil
+    }
+
+    func upsert(_ record: CacheRecord) {}
+
+    func pruneStale(validPaths: Set<String>) {
+        prunedPaths = validPaths
+    }
+
+    func count() -> Int { 0 }
+
+    func clearAll() {}
+
+    func sizeInBytes() -> Int64 { 0 }
+
+    func lastPrunedPaths() -> Set<String>? {
+        prunedPaths
+    }
 }
