@@ -202,4 +202,39 @@ enum L10n {
         case .cancelled: text(l, "Scan cancelled", "扫描已取消", "掃描已取消", "Análisis cancelado", "Analyse annulée")
         }
     }
+
+    static func scanProgressDetail(_ progress: ScanProgress, _ l: AppLanguage) -> String {
+        var parts: [String] = []
+        if let cacheKind = progress.cacheKind, progress.cacheTotal > 0 {
+            parts.append(cacheHitText(kind: cacheKind, hits: progress.cacheHits, total: progress.cacheTotal, l))
+        }
+        if !progress.currentFile.isEmpty {
+            parts.append(progress.currentFile)
+        }
+        return parts.joined(separator: " - ")
+    }
+
+    private static func cacheHitText(kind: ScanProgressCacheKind, hits: Int, total: Int, _ l: AppLanguage) -> String {
+        let clampedHits = max(0, min(hits, total))
+        switch kind {
+        case .metadata:
+            return text(
+                l,
+                "Metadata cache hits: \(clampedHits) of \(total)",
+                "元数据缓存命中：\(clampedHits) / \(total)",
+                "中繼資料快取命中：\(clampedHits) / \(total)",
+                "Aciertos de caché de metadatos: \(clampedHits) de \(total)",
+                "Métadonnées en cache : \(clampedHits) sur \(total)"
+            )
+        case .fingerprint:
+            return text(
+                l,
+                "Fingerprint cache hits: \(clampedHits) of \(total)",
+                "指纹缓存命中：\(clampedHits) / \(total)",
+                "指紋快取命中：\(clampedHits) / \(total)",
+                "Aciertos de caché de huellas: \(clampedHits) de \(total)",
+                "Empreintes en cache : \(clampedHits) sur \(total)"
+            )
+        }
+    }
 }

@@ -40,4 +40,29 @@ final class LocalizationTests: XCTestCase {
         XCTAssertEqual(L10n.similarMedia(.spanish), "Medios similares")
         XCTAssertEqual(L10n.similarMedia(.french), "Médias similaires")
     }
+
+    func testScanProgressDetailShowsCacheHitContext() {
+        let fingerprint = ScanProgress(
+            stage: .hashing,
+            fraction: 1,
+            currentFile: "",
+            discoveredCount: 5,
+            cacheHits: 3,
+            cacheTotal: 5,
+            cacheKind: .fingerprint
+        )
+        XCTAssertEqual(L10n.scanProgressDetail(fingerprint, .english), "Fingerprint cache hits: 3 of 5")
+        XCTAssertEqual(L10n.scanProgressDetail(fingerprint, .simplifiedChinese), "指纹缓存命中：3 / 5")
+
+        let metadata = ScanProgress(
+            stage: .readingMetadata,
+            fraction: 0.4,
+            currentFile: "clip.mov",
+            discoveredCount: 5,
+            cacheHits: 2,
+            cacheTotal: 5,
+            cacheKind: .metadata
+        )
+        XCTAssertEqual(L10n.scanProgressDetail(metadata, .english), "Metadata cache hits: 2 of 5 - clip.mov")
+    }
 }

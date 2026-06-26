@@ -101,6 +101,30 @@ final class ScanViewModelTests: XCTestCase {
         ])
     }
 
+    func testDefaultScannerUsesInjectedMetadataCache() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MetadataCacheScan-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let cachedVideo = root.appendingPathComponent("cached.mp4")
+        try Data([1, 2, 3]).write(to: cachedVideo)
+        let cache = MetadataHitCache()
+        let model = ScanViewModel(
+            pipeline: ExactDuplicatePipeline(),
+            hashCache: cache,
+            thumbnailStore: ThumbnailStore(directoryURL: root.appendingPathComponent("thumbs", isDirectory: true))
+        )
+        model.scanMode = .videos
+        model.selectedFolders = [root]
+
+        model.startScan()
+        try await waitUntil { model.progress.stage == .completed }
+
+        XCTAssertEqual(model.items.map { $0.url.standardizedFileURL.path }, [cachedVideo.standardizedFileURL.path])
+        let metadataLookups = await cache.metadataLookupCount()
+        XCTAssertEqual(metadataLookups, 1)
+    }
+
     func testDeletePromptStartsByChoosingMethod() {
         let model = ScanViewModel()
         model.requestDeletion(of: SimilarityScoringTests.video(name: "a.mov"))
@@ -518,6 +542,35 @@ final class ScanViewModelTests: XCTestCase {
         XCTAssertTrue(model.groupSortAscending)
     }
 
+    func testCommandSelectingGroupItemTogglesCheckedItemWithoutClearingOthers() {
+        let model = sortableGroup()
+        let items = model.sortedGroupItems
+
+        model.toggleGroupItemSelection(items[0].id)
+        model.toggleGroupItemSelection(items[2].id)
+
+        XCTAssertEqual(model.checkedMediaIDs, [items[0].id, items[2].id])
+        XCTAssertEqual(model.selectedMediaID, items[2].id)
+
+        model.toggleGroupItemSelection(items[0].id)
+
+        XCTAssertEqual(model.checkedMediaIDs, [items[2].id])
+    }
+
+    func testShiftSelectingGroupItemChecksRangeFromAnchorInCurrentSortOrder() {
+        let model = sortableGroup()
+        model.groupSortField = .fileSize
+        model.groupSortAscending = false
+        let items = model.sortedGroupItems
+        XCTAssertEqual(items.map(\.filename), ["a.mov", "c.mov", "b.mov"])
+
+        model.selectGroupItem(items[1].id)
+        model.extendGroupItemSelection(to: items[2].id)
+
+        XCTAssertEqual(model.checkedMediaIDs, [items[1].id, items[2].id])
+        XCTAssertEqual(model.selectedMediaID, items[2].id)
+    }
+
     func testGroupSortRefreshesAfterSelectionOrRebuild() {
         // Cached sort must repopulate when the selected group changes and when
         // its contents change (e.g. a deletion), not just on sort-field edits.
@@ -592,6 +645,32 @@ final class ScanViewModelTests: XCTestCase {
         XCTAssertNotNil(model.presentedError)
     }
 
+    func testPreviewDeletionUsesCheckedItemsWhenAnyAreSelected() {
+        let first = SimilarityScoringTests.video(name: "a.mov")
+        let second = SimilarityScoringTests.video(name: "b.mov")
+        let relation = SimilarityRelation(firstID: first.id, secondID: second.id, score: 0.95, evidence: [.similarFrames])
+        let model = ScanViewModel()
+        model.replaceResultsForTesting(items: [first, second], relations: [relation])
+        model.toggleChecked(first.id)
+        model.toggleChecked(second.id)
+
+        model.requestPreviewDeletion(defaultingTo: first)
+
+        XCTAssertEqual(Set(model.deletePrompt?.media.map(\.id) ?? []), [first.id, second.id])
+    }
+
+    func testPreviewDeletionUsesCurrentItemWhenNothingIsChecked() {
+        let first = SimilarityScoringTests.video(name: "a.mov")
+        let second = SimilarityScoringTests.video(name: "b.mov")
+        let relation = SimilarityRelation(firstID: first.id, secondID: second.id, score: 0.95, evidence: [.similarFrames])
+        let model = ScanViewModel()
+        model.replaceResultsForTesting(items: [first, second], relations: [relation])
+
+        model.requestPreviewDeletion(defaultingTo: first)
+
+        XCTAssertEqual(model.deletePrompt?.media.map(\.id), [first.id])
+    }
+
     func testCancellingImageStageShowsNoGroups() async throws {
         // Groups are published only after both kinds finish; cancelling during
         // the image stage means nothing was published yet, so the sidebar shows
@@ -647,6 +726,39 @@ final class ScanViewModelTests: XCTestCase {
         XCTAssertTrue(model.groups.isEmpty)
     }
 
+    func testDiscoverFilesPrunesHashCacheToDiscoveredPaths() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .resolvingSymlinksInPath()
+            .appendingPathComponent("DiscoverPrune-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let keepURL = root.appendingPathComponent("keep.mp4")
+        try Data([1]).write(to: keepURL)
+        let discoveredPath = try XCTUnwrap(VideoScanner.discoverVideoURLs(in: root).first).path
+        let cache = PruneRecordingCache()
+        let scanner = VideoScanner(maxConcurrentLoads: 1) { url in
+            MediaItem(
+                kind: .video,
+                url: url,
+                fileSize: 1,
+                duration: 1,
+                width: 16,
+                height: 9,
+                modifiedAt: nil,
+                thumbnailData: nil
+            )
+        }
+        let model = ScanViewModel(scanner: scanner, hashCache: cache)
+        model.selectedFolders = [root]
+
+        model.discoverFiles()
+        try await waitUntil { model.progress.stage == .completed }
+        try await waitUntilAsync { await cache.lastPrunedPaths() != nil }
+
+        let prunedPaths = await cache.lastPrunedPaths()
+        XCTAssertEqual(prunedPaths, [discoveredPath])
+    }
+
     private func waitUntil(
         timeoutIterations: Int = 200,
         condition: () -> Bool
@@ -656,6 +768,17 @@ final class ScanViewModelTests: XCTestCase {
             try await Task.sleep(for: .milliseconds(10))
         }
         XCTFail("Timed out waiting for scan state")
+    }
+
+    private func waitUntilAsync(
+        timeoutIterations: Int = 200,
+        condition: () async -> Bool
+    ) async throws {
+        for _ in 0..<timeoutIterations {
+            if await condition() { return }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTFail("Timed out waiting for async scan state")
     }
 }
 
@@ -700,4 +823,55 @@ private final class FakeDeletionService: DeletionServicing {
 
     func reveal(_ url: URL) {}
     func open(_ url: URL) {}
+}
+
+private actor PruneRecordingCache: HashCaching {
+    private var prunedPaths: Set<String>?
+
+    func lookup(filePath: String, fileSize: Int64, modifiedAt: Date?, mediaKind: MediaKind, algorithmVersion: String) -> CacheRecord? {
+        nil
+    }
+
+    func upsert(_ record: CacheRecord) {}
+
+    func pruneStale(validPaths: Set<String>) {
+        prunedPaths = validPaths
+    }
+
+    func count() -> Int { 0 }
+
+    func clearAll() {}
+
+    func sizeInBytes() -> Int64 { 0 }
+
+    func lastPrunedPaths() -> Set<String>? {
+        prunedPaths
+    }
+}
+
+private actor MetadataHitCache: HashCaching {
+    private(set) var metadataLookups = 0
+
+    func lookup(filePath: String, fileSize: Int64, modifiedAt: Date?, mediaKind: MediaKind, algorithmVersion: String) -> CacheRecord? {
+        nil
+    }
+
+    func upsert(_ record: CacheRecord) {}
+
+    func pruneStale(validPaths: Set<String>) {}
+
+    func count() -> Int { 0 }
+
+    func clearAll() {}
+
+    func sizeInBytes() -> Int64 { 0 }
+
+    func lookupMetadata(filePath: String, fileSize: Int64, modifiedAt: Date?, mediaKind: MediaKind) -> (duration: Double?, width: Int?, height: Int?)? {
+        metadataLookups += 1
+        return mediaKind == .video ? (duration: 12, width: 1920, height: 1080) : nil
+    }
+
+    func metadataLookupCount() -> Int {
+        metadataLookups
+    }
 }

@@ -46,8 +46,8 @@ struct ImageSimilarityPipeline: Sendable {
                 let perceptual = hash.similarity(to: neighbor.item)
                 var exact = false
                 if image.fileSize > 0 && image.fileSize == other.fileSize && neighbor.dist == 0,
-                   let firstHash = try? await FileHasher.sha256(of: image.url, cache: cache),
-                   let secondHash = try? await FileHasher.sha256(of: other.url, cache: cache) {
+                   let firstHash = try? await FileHasher.sha256(of: image.url, mediaKind: .image, cache: cache),
+                   let secondHash = try? await FileHasher.sha256(of: other.url, mediaKind: .image, cache: cache) {
                     exact = firstHash == secondHash
                 }
                 try Task.checkCancellation()
@@ -72,6 +72,17 @@ struct ImageSimilarityPipeline: Sendable {
                 hashes[image.id] = ImagePerceptualHash(mediaID: image.id, hashBits: Array(record.perceptualHash))
             } else { missing.append(image) }
         }
+        let cacheHits = hashes.count
+        if cache != nil, !images.isEmpty {
+            await progress(ScanProgress(
+                stage: .hashing,
+                fraction: Double(cacheHits) / Double(images.count),
+                discoveredCount: images.count,
+                cacheHits: cacheHits,
+                cacheTotal: images.count,
+                cacheKind: .fingerprint
+            ))
+        }
         try await withThrowingTaskGroup(of: (MediaItem, ImagePerceptualHash?).self) { group in
             var iterator = missing.makeIterator()
             for _ in 0..<min(4, missing.count) {
@@ -87,7 +98,15 @@ struct ImageSimilarityPipeline: Sendable {
                     record.algorithmVersion = Self.algorithmVersion
                     await cache?.upsert(record)
                 }
-                await progress(ScanProgress(stage: .hashing, fraction: images.isEmpty ? 1 : Double(completed) / Double(images.count), currentFile: item.filename, discoveredCount: images.count))
+                await progress(ScanProgress(
+                    stage: .hashing,
+                    fraction: images.isEmpty ? 1 : Double(completed) / Double(images.count),
+                    currentFile: item.filename,
+                    discoveredCount: images.count,
+                    cacheHits: cacheHits,
+                    cacheTotal: images.count,
+                    cacheKind: cache != nil && !images.isEmpty ? .fingerprint : nil
+                ))
                 if let next = iterator.next() { group.addTask { (next, try? ImagePerceptualHasher.hash(for: next.url, id: next.id)) } }
             }
         }

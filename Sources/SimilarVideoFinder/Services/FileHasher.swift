@@ -41,17 +41,21 @@ enum FileHasher {
     /// and stores the result after computing.  Avoids re-reading every byte of
     /// same-size files on every re-scan.
     static func sha256(of url: URL, cache: (any HashCaching)?) async throws -> String {
+        try await sha256(of: url, mediaKind: .video, cache: cache)
+    }
+
+    static func sha256(of url: URL, mediaKind: MediaKind, cache: (any HashCaching)?) async throws -> String {
         guard let cache else { return try await sha256(of: url) }
 
         let values = try url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
         let fileSize = Int64(values.fileSize ?? 0)
         let modifiedAt = values.contentModificationDate
 
-        if let cached = await cache.lookupSHA256(filePath: url.path, fileSize: fileSize, modifiedAt: modifiedAt) {
+        if let cached = await cache.lookupSHA256(filePath: url.path, fileSize: fileSize, modifiedAt: modifiedAt, mediaKind: mediaKind) {
             return cached
         }
         let hash = try await sha256(of: url)
-        await cache.upsertSHA256(filePath: url.path, fileSize: fileSize, modifiedAt: modifiedAt, sha256: hash)
+        await cache.upsertSHA256(filePath: url.path, fileSize: fileSize, modifiedAt: modifiedAt, mediaKind: mediaKind, sha256: hash)
         return hash
     }
 }

@@ -39,6 +39,28 @@ final class SimilarityPipelineResilienceTests: XCTestCase {
         XCTAssertEqual(SimilarityPipeline.hashConcurrencyLimit(processorCount: 12), 4)
     }
 
+    func testCachedVideoHashesAdvanceHashingProgress() async throws {
+        let first = video(path: "/missing/cached-first.mp4", size: 1_000)
+        let second = video(path: "/missing/cached-second.mp4", size: 1_100)
+        let cache = InMemoryHashCache()
+        await seed(cache, video: first, hash: [UInt8](repeating: 0, count: 8))
+        await seed(cache, video: second, hash: [1] + [UInt8](repeating: 0, count: 7))
+        let progress = VideoProgressRecorder()
+        let pipeline = SimilarityPipeline(cache: cache)
+
+        _ = try await pipeline.process(videos: [first, second], threshold: 0.72) {
+            await progress.append($0)
+        }
+
+        let hashingFractions = await progress.fractions(for: .hashing)
+        XCTAssertTrue(hashingFractions.contains(1))
+        let hashingUpdates = await progress.updates(for: .hashing)
+        let finalHashing = try XCTUnwrap(hashingUpdates.last)
+        XCTAssertEqual(finalHashing.cacheKind, .fingerprint)
+        XCTAssertEqual(finalHashing.cacheHits, 2)
+        XCTAssertEqual(finalHashing.cacheTotal, 2)
+    }
+
     private func video(path: String, size: Int64) -> MediaItem {
         MediaItem(
             kind: .video,
@@ -72,5 +94,21 @@ private actor CountingThrowingExtractor: FrameFeatureExtracting {
 
     func similarity(between first: FrameFeatures, and second: FrameFeatures) async throws -> Double? {
         nil
+    }
+}
+
+private actor VideoProgressRecorder {
+    private var updates: [ScanProgress] = []
+
+    func append(_ update: ScanProgress) {
+        updates.append(update)
+    }
+
+    func fractions(for stage: ScanStage) -> [Double] {
+        updates.filter { $0.stage == stage }.map(\.fraction)
+    }
+
+    func updates(for stage: ScanStage) -> [ScanProgress] {
+        updates.filter { $0.stage == stage }
     }
 }

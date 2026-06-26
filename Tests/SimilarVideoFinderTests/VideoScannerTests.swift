@@ -85,6 +85,31 @@ final class VideoScannerTests: XCTestCase {
         XCTAssertGreaterThan(maximum, 1)
         XCTAssertLessThanOrEqual(maximum, 3)
     }
+
+    func testScanProgressReportsMetadataCacheHits() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let thumbnailRoot = root.appendingPathComponent("thumbs", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try Data([1, 2, 3]).write(to: root.appendingPathComponent("cached.mp4"))
+        let cache = VideoMetadataHitCache()
+        let progress = VideoScannerProgressRecorder()
+        let scanner = VideoScanner(
+            maxConcurrentLoads: 1,
+            thumbnailStore: ThumbnailStore(directoryURL: thumbnailRoot),
+            metadataCache: cache
+        )
+
+        _ = try await scanner.scan(folder: root) {
+            await progress.append($0)
+        }
+
+        let readingUpdates = await progress.updates(for: .readingMetadata)
+        let finalReading = try XCTUnwrap(readingUpdates.last)
+        XCTAssertEqual(finalReading.cacheKind, .metadata)
+        XCTAssertEqual(finalReading.cacheHits, 1)
+        XCTAssertEqual(finalReading.cacheTotal, 1)
+    }
 }
 
 private actor LoadConcurrencyTracker {
@@ -98,5 +123,37 @@ private actor LoadConcurrencyTracker {
 
     func finished() {
         current -= 1
+    }
+}
+
+private actor VideoScannerProgressRecorder {
+    private var updates: [ScanProgress] = []
+
+    func append(_ update: ScanProgress) {
+        updates.append(update)
+    }
+
+    func updates(for stage: ScanStage) -> [ScanProgress] {
+        updates.filter { $0.stage == stage }
+    }
+}
+
+private actor VideoMetadataHitCache: HashCaching {
+    func lookup(filePath: String, fileSize: Int64, modifiedAt: Date?, mediaKind: MediaKind, algorithmVersion: String) -> CacheRecord? {
+        nil
+    }
+
+    func upsert(_ record: CacheRecord) {}
+
+    func pruneStale(validPaths: Set<String>) {}
+
+    func count() -> Int { 0 }
+
+    func clearAll() {}
+
+    func sizeInBytes() -> Int64 { 0 }
+
+    func lookupMetadata(filePath: String, fileSize: Int64, modifiedAt: Date?, mediaKind: MediaKind) -> (duration: Double?, width: Int?, height: Int?)? {
+        mediaKind == .video ? (duration: 8, width: 1280, height: 720) : nil
     }
 }

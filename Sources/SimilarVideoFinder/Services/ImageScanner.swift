@@ -12,6 +12,7 @@ struct ImageScanResult: Sendable {
 
 struct ImageScanner: Sendable {
     typealias ImageLoader = @Sendable (URL) async throws -> MediaItem
+    private typealias ImageProgressLoader = @Sendable (URL) async throws -> LoadedImageMedia
 
     static let supportedExtensions: Set<String> = [
         "jpg", "jpeg", "png", "heic", "heif", "webp", "tif", "tiff", "gif", "bmp"
@@ -20,6 +21,8 @@ struct ImageScanner: Sendable {
     let maxConcurrentLoads: Int
     let loader: ImageLoader
     let metadataCache: (any HashCaching)?
+    let usesDefaultLoader: Bool
+    private let progressLoader: ImageProgressLoader
 
     init(
         maxConcurrentLoads: Int = min(4, max(2, ProcessInfo.processInfo.activeProcessorCount / 2)),
@@ -29,7 +32,20 @@ struct ImageScanner: Sendable {
     ) {
         self.maxConcurrentLoads = max(1, maxConcurrentLoads)
         self.metadataCache = metadataCache
-        self.loader = loader ?? { url in try await Self.loadImage(at: url, thumbnailStore: thumbnailStore, metadataCache: metadataCache) }
+        self.usesDefaultLoader = loader == nil
+        if let loader {
+            self.loader = loader
+            self.progressLoader = { url in
+                LoadedImageMedia(image: try await loader(url), metadataCacheHit: false)
+            }
+        } else {
+            self.progressLoader = { url in
+                try await Self.loadImage(at: url, thumbnailStore: thumbnailStore, metadataCache: metadataCache)
+            }
+            self.loader = { url in
+                try await Self.loadImage(at: url, thumbnailStore: thumbnailStore, metadataCache: metadataCache).image
+            }
+        }
     }
 
     static func discoverImageURLs(in folder: URL) throws -> [URL] {
@@ -55,14 +71,22 @@ struct ImageScanner: Sendable {
         progress: @escaping @Sendable (ScanProgress) async -> Void
     ) async throws -> ImageScanResult {
         let urls = try Self.discoverImageURLs(in: folder)
-        await progress(ScanProgress(stage: .readingMetadata, fraction: 0, discoveredCount: urls.count))
+        let reportsMetadataCache = metadataCache != nil && usesDefaultLoader
+        await progress(ScanProgress(
+            stage: .readingMetadata,
+            fraction: 0,
+            discoveredCount: urls.count,
+            cacheTotal: reportsMetadataCache ? urls.count : 0,
+            cacheKind: reportsMetadataCache ? .metadata : nil
+        ))
 
-        let loader = self.loader
+        let loader = self.progressLoader
         let limit = maxConcurrentLoads
         let results = try await withThrowingTaskGroup(of: LoadedImage.self) { group in
             var iterator = Array(urls.enumerated()).makeIterator()
             var collected: [LoadedImage] = []
             var completed = 0
+            var metadataCacheHits = 0
 
             for _ in 0..<min(limit, urls.count) {
                 guard let next = iterator.next() else { break }
@@ -73,11 +97,15 @@ struct ImageScanner: Sendable {
                 try Task.checkCancellation()
                 collected.append(result)
                 completed += 1
+                if result.metadataCacheHit { metadataCacheHits += 1 }
                 await progress(ScanProgress(
                     stage: .readingMetadata,
                     fraction: urls.isEmpty ? 1 : Double(completed) / Double(urls.count),
                     currentFile: result.url.lastPathComponent,
-                    discoveredCount: urls.count
+                    discoveredCount: urls.count,
+                    cacheHits: metadataCacheHits,
+                    cacheTotal: reportsMetadataCache ? urls.count : 0,
+                    cacheKind: reportsMetadataCache ? .metadata : nil
                 ))
                 if let next = iterator.next() {
                     group.addTask { try await Self.load(index: next.offset, url: next.element, using: loader) }
@@ -92,9 +120,10 @@ struct ImageScanner: Sendable {
         )
     }
 
-    private static func load(index: Int, url: URL, using loader: ImageLoader) async throws -> LoadedImage {
+    private static func load(index: Int, url: URL, using loader: ImageProgressLoader) async throws -> LoadedImage {
         do {
-            return LoadedImage(index: index, url: url, image: try await loader(url), issue: nil)
+            let loaded = try await loader(url)
+            return LoadedImage(index: index, url: url, image: loaded.image, metadataCacheHit: loaded.metadataCacheHit, issue: nil)
         } catch is CancellationError {
             throw CancellationError()
         } catch {
@@ -102,34 +131,76 @@ struct ImageScanner: Sendable {
                 index: index,
                 url: url,
                 image: nil,
+                metadataCacheHit: false,
                 issue: ScanIssue(url: url, reason: .unreadableImage)
             )
         }
     }
 
-    private static func loadImage(at url: URL, thumbnailStore: ThumbnailStore, metadataCache: (any HashCaching)?) async throws -> MediaItem {
+    private static func loadImage(at url: URL, thumbnailStore: ThumbnailStore, metadataCache: (any HashCaching)?) async throws -> LoadedImageMedia {
         let values = try url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
+        let fileSize = Int64(values.fileSize ?? 0)
+        let modifiedAt = values.contentModificationDate
+        let cachedMetadata = await metadataCache?.lookupMetadata(
+            filePath: url.path,
+            fileSize: fileSize,
+            modifiedAt: modifiedAt,
+            mediaKind: .image
+        )
+        let metadataCacheHit = cachedMetadata?.width != nil && cachedMetadata?.height != nil
+
+        if metadataCacheHit,
+           let width = cachedMetadata?.width,
+           let height = cachedMetadata?.height,
+           let existingURL = thumbnailStore.existingThumbnailURL(for: url, modifiedAt: modifiedAt) {
+            return LoadedImageMedia(
+                image: MediaItem(
+                    kind: .image,
+                    url: url,
+                    fileSize: fileSize,
+                    duration: nil,
+                    width: width,
+                    height: height,
+                    modifiedAt: modifiedAt,
+                    thumbnailData: nil,
+                    thumbnailURL: existingURL
+                ),
+                metadataCacheHit: true
+            )
+        }
+
         guard let source = CGImageSourceCreateWithURL(url as CFURL, [
             kCGImageSourceShouldCache: false
-        ] as CFDictionary),
-        let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
-        let rawWidth = properties[kCGImagePropertyPixelWidth] as? NSNumber,
-        let rawHeight = properties[kCGImagePropertyPixelHeight] as? NSNumber else {
+        ] as CFDictionary) else {
             throw ImageScannerError.unreadableImage
         }
 
-        let orientation = (properties[kCGImagePropertyOrientation] as? NSNumber)?.intValue ?? 1
-        let swapsDimensions = [5, 6, 7, 8].contains(orientation)
-        let width = swapsDimensions ? rawHeight.intValue : rawWidth.intValue
-        let height = swapsDimensions ? rawWidth.intValue : rawHeight.intValue
+        let width: Int
+        let height: Int
+        if metadataCacheHit, let cachedWidth = cachedMetadata?.width, let cachedHeight = cachedMetadata?.height {
+            width = cachedWidth
+            height = cachedHeight
+        } else {
+            guard
+                let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+                let rawWidth = properties[kCGImagePropertyPixelWidth] as? NSNumber,
+                let rawHeight = properties[kCGImagePropertyPixelHeight] as? NSNumber
+            else {
+                throw ImageScannerError.unreadableImage
+            }
+            let orientation = (properties[kCGImagePropertyOrientation] as? NSNumber)?.intValue ?? 1
+            let swapsDimensions = [5, 6, 7, 8].contains(orientation)
+            width = swapsDimensions ? rawHeight.intValue : rawWidth.intValue
+            height = swapsDimensions ? rawWidth.intValue : rawHeight.intValue
+        }
 
         // Store minimal metadata so `detectMove` can locate the old path when
         // this image is later moved to a different folder.
-        if let cache = metadataCache {
+        if let cache = metadataCache, !metadataCacheHit {
             await cache.upsertMetadata(
                 filePath: url.path,
-                fileSize: Int64(values.fileSize ?? 0),
-                modifiedAt: values.contentModificationDate,
+                fileSize: fileSize,
+                modifiedAt: modifiedAt,
                 mediaKind: .image,
                 duration: nil,
                 width: width,
@@ -145,17 +216,20 @@ struct ImageScanner: Sendable {
         ]
         // Reuse a persisted thumbnail if one exists for this (path, modifiedAt)
         // — avoids re-decoding and re-downscaling the image on re-scan.
-        if let existingURL = thumbnailStore.existingThumbnailURL(for: url, modifiedAt: values.contentModificationDate) {
-            return MediaItem(
-                kind: .image,
-                url: url,
-                fileSize: Int64(values.fileSize ?? 0),
-                duration: nil,
-                width: width,
-                height: height,
-                modifiedAt: values.contentModificationDate,
-                thumbnailData: nil,
-                thumbnailURL: existingURL
+        if let existingURL = thumbnailStore.existingThumbnailURL(for: url, modifiedAt: modifiedAt) {
+            return LoadedImageMedia(
+                image: MediaItem(
+                    kind: .image,
+                    url: url,
+                    fileSize: fileSize,
+                    duration: nil,
+                    width: width,
+                    height: height,
+                    modifiedAt: modifiedAt,
+                    thumbnailData: nil,
+                    thumbnailURL: existingURL
+                ),
+                metadataCacheHit: metadataCacheHit
             )
         }
         // Move detection: the file may have been relocated from another folder.
@@ -165,26 +239,29 @@ struct ImageScanner: Sendable {
         if let cache = metadataCache,
            let oldPath = await cache.detectMove(
                filePath: url.path,
-               fileSize: Int64(values.fileSize ?? 0),
-               modifiedAt: values.contentModificationDate,
+               fileSize: fileSize,
+               modifiedAt: modifiedAt,
                mediaKind: .image,
                algorithmVersion: ImageSimilarityPipeline.algorithmVersion
            ) {
-            migratedURL = thumbnailStore.migrateFromOldPath(oldPath, to: url, modifiedAt: values.contentModificationDate)
+            migratedURL = thumbnailStore.migrateFromOldPath(oldPath, to: url, modifiedAt: modifiedAt)
         } else {
             migratedURL = nil
         }
         if let migratedURL {
-            return MediaItem(
-                kind: .image,
-                url: url,
-                fileSize: Int64(values.fileSize ?? 0),
-                duration: nil,
-                width: width,
-                height: height,
-                modifiedAt: values.contentModificationDate,
-                thumbnailData: nil,
-                thumbnailURL: migratedURL
+            return LoadedImageMedia(
+                image: MediaItem(
+                    kind: .image,
+                    url: url,
+                    fileSize: fileSize,
+                    duration: nil,
+                    width: width,
+                    height: height,
+                    modifiedAt: modifiedAt,
+                    thumbnailData: nil,
+                    thumbnailURL: migratedURL
+                ),
+                metadataCacheHit: metadataCacheHit
             )
         }
         guard let thumbnail = CGImageSourceCreateThumbnailAtIndex(source, 0, thumbnailOptions as CFDictionary) else {
@@ -193,19 +270,22 @@ struct ImageScanner: Sendable {
         let representation = NSBitmapImageRep(cgImage: thumbnail)
         let thumbnailData = representation.representation(using: .jpeg, properties: [.compressionFactor: 0.78])
         let thumbnailURL = thumbnailData.flatMap {
-            try? thumbnailStore.persist($0, sourceURL: url, modifiedAt: values.contentModificationDate)
+            try? thumbnailStore.persist($0, sourceURL: url, modifiedAt: modifiedAt)
         }
 
-        return MediaItem(
-            kind: .image,
-            url: url,
-            fileSize: Int64(values.fileSize ?? 0),
-            duration: nil,
-            width: width,
-            height: height,
-            modifiedAt: values.contentModificationDate,
-            thumbnailData: thumbnailURL == nil ? thumbnailData : nil,
-            thumbnailURL: thumbnailURL
+        return LoadedImageMedia(
+            image: MediaItem(
+                kind: .image,
+                url: url,
+                fileSize: fileSize,
+                duration: nil,
+                width: width,
+                height: height,
+                modifiedAt: modifiedAt,
+                thumbnailData: thumbnailURL == nil ? thumbnailData : nil,
+                thumbnailURL: thumbnailURL
+            ),
+            metadataCacheHit: metadataCacheHit
         )
     }
 }
@@ -214,7 +294,13 @@ private struct LoadedImage: Sendable {
     let index: Int
     let url: URL
     let image: MediaItem?
+    let metadataCacheHit: Bool
     let issue: ScanIssue?
+}
+
+private struct LoadedImageMedia: Sendable {
+    let image: MediaItem
+    let metadataCacheHit: Bool
 }
 
 private enum ImageScannerError: Error {

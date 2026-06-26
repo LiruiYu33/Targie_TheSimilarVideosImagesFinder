@@ -190,9 +190,17 @@ enum ScanStage: Equatable, Sendable {
     case cancelled
 }
 
+enum ScanProgressCacheKind: Equatable, Sendable {
+    case metadata
+    case fingerprint
+}
+
 struct ScanProgress: Equatable, Sendable {
     var stage: ScanStage = .idle
     var fraction: Double = 0
     var currentFile: String = ""
     var discoveredCount: Int = 0
+    var cacheHits: Int = 0
+    var cacheTotal: Int = 0
+    var cacheKind: ScanProgressCacheKind?
 }

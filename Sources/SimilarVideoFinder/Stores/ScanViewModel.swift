@@ -117,25 +117,29 @@ final class ScanViewModel: ObservableObject {
     private let pipeline: any SimilarityProcessing
     private let deletionService: any DeletionServicing
     private let hashCache: (any HashCaching)?
+    private let thumbnailStore: ThumbnailStore
+    private var groupSelectionAnchorID: UUID?
 
     init(
         scanner: VideoScanner = VideoScanner(),
         imageScanner: ImageScanner = ImageScanner(),
         pipeline: (any SimilarityProcessing)? = nil,
         deletionService: any DeletionServicing = DeletionService(),
-        hashCache: (any HashCaching)? = ScanViewModel.makeDefaultHashCache()
+        hashCache: (any HashCaching)? = ScanViewModel.makeDefaultHashCache(),
+        thumbnailStore: ThumbnailStore = .shared
     ) {
         self.deletionService = deletionService
         self.hashCache = hashCache
+        self.thumbnailStore = thumbnailStore
         self.pipeline = pipeline ?? SimilarityPipeline(cache: hashCache)
         self.imagePipeline = ImageSimilarityPipeline(cache: hashCache)
-        // Use caller-provided scanners, but if they used the default (no-cache)
-        // ones, replace with cache-equipped versions so re-scan skips AVFoundation.
-        self.scanner = scanner.metadataCache == nil
-            ? VideoScanner(maxConcurrentLoads: scanner.maxConcurrentLoads, thumbnailStore: .shared, metadataCache: hashCache, loader: scanner.loader)
+        // Use caller-provided scanners, but if they used the default loader,
+        // replace it with a cache-equipped default so re-scan skips media I/O.
+        self.scanner = scanner.metadataCache == nil && scanner.usesDefaultLoader
+            ? VideoScanner(maxConcurrentLoads: scanner.maxConcurrentLoads, thumbnailStore: thumbnailStore, metadataCache: hashCache)
             : scanner
-        self.imageScanner = imageScanner.metadataCache == nil
-            ? ImageScanner(maxConcurrentLoads: imageScanner.maxConcurrentLoads, thumbnailStore: .shared, metadataCache: hashCache, loader: imageScanner.loader)
+        self.imageScanner = imageScanner.metadataCache == nil && imageScanner.usesDefaultLoader
+            ? ImageScanner(maxConcurrentLoads: imageScanner.maxConcurrentLoads, thumbnailStore: thumbnailStore, metadataCache: hashCache)
             : imageScanner
     }
 
@@ -218,6 +222,7 @@ final class ScanViewModel: ObservableObject {
         allRelations = []
         groups = []
         checkedMediaIDs = []
+        groupSelectionAnchorID = nil
         issues = []
         scanTask = Task { [weak self] in
             guard let self else { return }
@@ -248,12 +253,7 @@ final class ScanViewModel: ObservableObject {
                 // so only the progress and cache cleanup remain here.
                 issues = scanIssues
                 progress = ScanProgress(stage: .completed, fraction: 1, discoveredCount: items.count)
-
-                // 清理缓存中已不存在的视频条目
-                if let hashCache {
-                    let validPaths = Set(items.map { $0.url.path })
-                    Task { await hashCache.pruneStale(validPaths: validPaths) }
-                }
+                pruneCaches(for: items)
             } catch is CancellationError {
                 progress = ScanProgress(stage: .cancelled)
             } catch {
@@ -326,6 +326,7 @@ final class ScanViewModel: ObservableObject {
                 allItems = items
                 issues = scanIssues
                 progress = ScanProgress(stage: .completed, fraction: 1, discoveredCount: items.count)
+                pruneCaches(for: items)
             } catch is CancellationError {
                 progress = ScanProgress(stage: .cancelled)
             } catch {
@@ -347,8 +348,22 @@ final class ScanViewModel: ObservableObject {
             selectedGroupID = nil
             selectedMediaID = nil
             sortedGroupItems = []
+            groupSelectionAnchorID = nil
         }
         checkedMediaIDs.formIntersection(visibleItemIDs(for: mode))
+    }
+
+    private func pruneCaches(for items: [MediaItem]) {
+        let validPaths = Set(items.map { $0.url.path })
+        if let hashCache {
+            Task { await hashCache.pruneStale(validPaths: validPaths) }
+        }
+
+        let thumbnailStore = self.thumbnailStore
+        let validSourceURLs = Set(items.map(\.url))
+        Task.detached(priority: .utility) {
+            try? thumbnailStore.pruneStale(validSourceURLs: validSourceURLs)
+        }
     }
 
     private func kind(for mode: ScanMode) -> MediaKind? {
@@ -370,6 +385,34 @@ final class ScanViewModel: ObservableObject {
         // Select the first item *under the current sort order*, not the
         // grouper's raw items order, so the highlight matches the visual.
         selectedMediaID = sortedGroupItems.first?.id
+        groupSelectionAnchorID = selectedMediaID
+    }
+
+    func selectGroupItem(_ id: UUID) {
+        selectedMediaID = id
+        groupSelectionAnchorID = id
+    }
+
+    func toggleGroupItemSelection(_ id: UUID) {
+        selectedMediaID = id
+        toggleChecked(id)
+    }
+
+    func extendGroupItemSelection(to id: UUID) {
+        let anchorID = groupSelectionAnchorID ?? selectedMediaID ?? id
+        selectedMediaID = id
+
+        guard
+            let anchorIndex = sortedGroupItems.firstIndex(where: { $0.id == anchorID }),
+            let targetIndex = sortedGroupItems.firstIndex(where: { $0.id == id })
+        else {
+            checkedMediaIDs.insert(id)
+            groupSelectionAnchorID = id
+            return
+        }
+
+        let range = min(anchorIndex, targetIndex)...max(anchorIndex, targetIndex)
+        checkedMediaIDs.formUnion(sortedGroupItems[range].map(\.id))
     }
 
     /// Recomputes `sortedGroupItems` from the currently selected group. Cheap
@@ -448,8 +491,17 @@ final class ScanViewModel: ObservableObject {
         if !selected.isEmpty { deletePrompt = DeletePrompt(media: selected, step: .choosingMethod) }
     }
 
+    func requestPreviewDeletion(defaultingTo media: MediaItem) {
+        if checkedMediaIDs.isEmpty {
+            requestDeletion(of: media)
+        } else {
+            requestCheckedDeletion()
+        }
+    }
+
     func toggleChecked(_ id: UUID) {
         if checkedMediaIDs.contains(id) { checkedMediaIDs.remove(id) } else { checkedMediaIDs.insert(id) }
+        groupSelectionAnchorID = id
     }
 
     func askForPermanentConfirmation() {
@@ -650,6 +702,7 @@ final class ScanViewModel: ObservableObject {
         selectedGroupID = nil
         selectedMediaID = nil
         sortedGroupItems = []
+        groupSelectionAnchorID = nil
     }
 
     private func resetResults() {
@@ -660,6 +713,7 @@ final class ScanViewModel: ObservableObject {
         selectedMediaID = nil
         sortedGroupItems = []
         checkedMediaIDs = []
+        groupSelectionAnchorID = nil
         progress = ScanProgress()
         issues = []
     }
