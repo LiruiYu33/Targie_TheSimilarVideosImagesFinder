@@ -381,6 +381,7 @@ final class ScanViewModel: ObservableObject {
 
     func selectGroup(_ id: UUID?) {
         selectedGroupID = id
+        checkedMediaIDs.removeAll()
         recomputeSortedGroupItems()
         // Select the first item *under the current sort order*, not the
         // grouper's raw items order, so the highlight matches the visual.
@@ -391,11 +392,17 @@ final class ScanViewModel: ObservableObject {
     func selectGroupItem(_ id: UUID) {
         selectedMediaID = id
         groupSelectionAnchorID = id
+        checkedMediaIDs.removeAll()
     }
 
     func toggleGroupItemSelection(_ id: UUID) {
         selectedMediaID = id
         toggleChecked(id)
+    }
+
+    func clearGroupItemSelection() {
+        checkedMediaIDs.removeAll()
+        groupSelectionAnchorID = selectedMediaID
     }
 
     func extendGroupItemSelection(to id: UUID) {
