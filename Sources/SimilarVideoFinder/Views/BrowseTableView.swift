@@ -53,7 +53,7 @@ struct BrowseTableView: View {
                 ProgressView(value: browseModel.scanModel.progress.fraction) {
                     Text(L10n.scanStage(browseModel.scanModel.progress.stage, language))
                 } currentValueLabel: {
-                    Text(browseModel.scanModel.progress.currentFile)
+                    Text(L10n.scanProgressDetail(browseModel.scanModel.progress, language))
                         .lineLimit(1)
                         .font(.caption)
                         .foregroundStyle(.secondary)

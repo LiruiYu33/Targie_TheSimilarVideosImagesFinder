@@ -59,6 +59,11 @@ final class ImageSimilarityPipelineTests: XCTestCase {
 
         let hashingFractions = await progress.fractions(for: .hashing)
         XCTAssertTrue(hashingFractions.contains(1))
+        let hashingUpdates = await progress.updates(for: .hashing)
+        let finalHashing = try XCTUnwrap(hashingUpdates.last)
+        XCTAssertEqual(finalHashing.cacheKind, .fingerprint)
+        XCTAssertEqual(finalHashing.cacheHits, 1)
+        XCTAssertEqual(finalHashing.cacheTotal, 1)
     }
 
     private func writePattern(to url: URL) throws {
@@ -82,5 +87,9 @@ private actor ImageProgressRecorder {
 
     func fractions(for stage: ScanStage) -> [Double] {
         updates.filter { $0.stage == stage }.map(\.fraction)
+    }
+
+    func updates(for stage: ScanStage) -> [ScanProgress] {
+        updates.filter { $0.stage == stage }
     }
 }

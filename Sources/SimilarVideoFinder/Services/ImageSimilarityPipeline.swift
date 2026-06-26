@@ -72,8 +72,16 @@ struct ImageSimilarityPipeline: Sendable {
                 hashes[image.id] = ImagePerceptualHash(mediaID: image.id, hashBits: Array(record.perceptualHash))
             } else { missing.append(image) }
         }
-        if !hashes.isEmpty {
-            await progress(ScanProgress(stage: .hashing, fraction: images.isEmpty ? 1 : Double(hashes.count) / Double(images.count), discoveredCount: images.count))
+        let cacheHits = hashes.count
+        if cache != nil, !images.isEmpty {
+            await progress(ScanProgress(
+                stage: .hashing,
+                fraction: Double(cacheHits) / Double(images.count),
+                discoveredCount: images.count,
+                cacheHits: cacheHits,
+                cacheTotal: images.count,
+                cacheKind: .fingerprint
+            ))
         }
         try await withThrowingTaskGroup(of: (MediaItem, ImagePerceptualHash?).self) { group in
             var iterator = missing.makeIterator()
@@ -90,7 +98,15 @@ struct ImageSimilarityPipeline: Sendable {
                     record.algorithmVersion = Self.algorithmVersion
                     await cache?.upsert(record)
                 }
-                await progress(ScanProgress(stage: .hashing, fraction: images.isEmpty ? 1 : Double(completed) / Double(images.count), currentFile: item.filename, discoveredCount: images.count))
+                await progress(ScanProgress(
+                    stage: .hashing,
+                    fraction: images.isEmpty ? 1 : Double(completed) / Double(images.count),
+                    currentFile: item.filename,
+                    discoveredCount: images.count,
+                    cacheHits: cacheHits,
+                    cacheTotal: images.count,
+                    cacheKind: cache != nil && !images.isEmpty ? .fingerprint : nil
+                ))
                 if let next = iterator.next() { group.addTask { (next, try? ImagePerceptualHasher.hash(for: next.url, id: next.id)) } }
             }
         }

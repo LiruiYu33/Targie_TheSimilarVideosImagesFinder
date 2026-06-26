@@ -30,6 +30,7 @@ struct VideoScanResult: Sendable {
 
 struct VideoScanner {
     typealias VideoLoader = @Sendable (URL) async throws -> MediaItem
+    private typealias VideoProgressLoader = @Sendable (URL) async throws -> LoadedVideoMedia
 
     static let supportedExtensions: Set<String> = [
         "mp4", "mov", "m4v", "avi", "mkv", "webm", "mpeg", "mpg", "3gp"
@@ -38,6 +39,8 @@ struct VideoScanner {
     let maxConcurrentLoads: Int
     let loader: VideoLoader
     let metadataCache: (any HashCaching)?
+    let usesDefaultLoader: Bool
+    private let progressLoader: VideoProgressLoader
 
     init(
         maxConcurrentLoads: Int = min(4, max(2, ProcessInfo.processInfo.activeProcessorCount / 2)),
@@ -47,9 +50,20 @@ struct VideoScanner {
     ) {
         self.maxConcurrentLoads = max(1, maxConcurrentLoads)
         self.metadataCache = metadataCache
-        self.loader = loader ?? { url in try await Self.loadVideo(
-            at: url, thumbnailStore: thumbnailStore, metadataCache: metadataCache
-        ) }
+        self.usesDefaultLoader = loader == nil
+        if let loader {
+            self.loader = loader
+            self.progressLoader = { url in
+                LoadedVideoMedia(video: try await loader(url), metadataCacheHit: false)
+            }
+        } else {
+            self.progressLoader = { url in
+                try await Self.loadVideo(at: url, thumbnailStore: thumbnailStore, metadataCache: metadataCache)
+            }
+            self.loader = { url in
+                try await Self.loadVideo(at: url, thumbnailStore: thumbnailStore, metadataCache: metadataCache).video
+            }
+        }
     }
 
     static func discoverVideoURLs(in folder: URL) throws -> [URL] {
@@ -74,13 +88,21 @@ struct VideoScanner {
         progress: @escaping @Sendable (ScanProgress) async -> Void
     ) async throws -> VideoScanResult {
         let urls = try Self.discoverVideoURLs(in: folder)
-        await progress(ScanProgress(stage: .readingMetadata, fraction: 0, discoveredCount: urls.count))
-        let loader = self.loader
+        let reportsMetadataCache = metadataCache != nil && usesDefaultLoader
+        await progress(ScanProgress(
+            stage: .readingMetadata,
+            fraction: 0,
+            discoveredCount: urls.count,
+            cacheTotal: reportsMetadataCache ? urls.count : 0,
+            cacheKind: reportsMetadataCache ? .metadata : nil
+        ))
+        let loader = self.progressLoader
         let limit = maxConcurrentLoads
         let results = try await withThrowingTaskGroup(of: LoadedVideo.self) { group in
             var iterator = Array(urls.enumerated()).makeIterator()
             var collected: [LoadedVideo] = []
             var completed = 0
+            var metadataCacheHits = 0
 
             for _ in 0..<min(limit, urls.count) {
                 guard let next = iterator.next() else { break }
@@ -91,11 +113,15 @@ struct VideoScanner {
                 try Task.checkCancellation()
                 collected.append(result)
                 completed += 1
+                if result.metadataCacheHit { metadataCacheHits += 1 }
                 await progress(ScanProgress(
                     stage: .readingMetadata,
                     fraction: urls.isEmpty ? 1 : Double(completed) / Double(urls.count),
                     currentFile: result.url.lastPathComponent,
-                    discoveredCount: urls.count
+                    discoveredCount: urls.count,
+                    cacheHits: metadataCacheHits,
+                    cacheTotal: reportsMetadataCache ? urls.count : 0,
+                    cacheKind: reportsMetadataCache ? .metadata : nil
                 ))
                 if let next = iterator.next() {
                     group.addTask { try await Self.load(index: next.offset, url: next.element, using: loader) }
@@ -110,15 +136,16 @@ struct VideoScanner {
         )
     }
 
-    private static func load(index: Int, url: URL, using loader: VideoLoader) async throws -> LoadedVideo {
+    private static func load(index: Int, url: URL, using loader: VideoProgressLoader) async throws -> LoadedVideo {
         do {
-            return LoadedVideo(index: index, url: url, video: try await loader(url), issue: nil)
+            let loaded = try await loader(url)
+            return LoadedVideo(index: index, url: url, video: loaded.video, metadataCacheHit: loaded.metadataCacheHit, issue: nil)
         } catch is CancellationError {
             throw CancellationError()
         } catch ScannerError.noVideoTrack {
-            return LoadedVideo(index: index, url: url, video: nil, issue: ScanIssue(url: url, reason: .noVideoTrack))
+            return LoadedVideo(index: index, url: url, video: nil, metadataCacheHit: false, issue: ScanIssue(url: url, reason: .noVideoTrack))
         } catch {
-            return LoadedVideo(index: index, url: url, video: nil, issue: ScanIssue(url: url, reason: .message(error.localizedDescription)))
+            return LoadedVideo(index: index, url: url, video: nil, metadataCacheHit: false, issue: ScanIssue(url: url, reason: .message(error.localizedDescription)))
         }
     }
 
@@ -126,7 +153,7 @@ struct VideoScanner {
         at url: URL,
         thumbnailStore: ThumbnailStore,
         metadataCache: (any HashCaching)?
-    ) async throws -> MediaItem {
+    ) async throws -> LoadedVideoMedia {
         try Task.checkCancellation()
         let values = try url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
         let fileSize = Int64(values.fileSize ?? 0)
@@ -140,11 +167,12 @@ struct VideoScanner {
            ),
            let duration = meta.duration, let width = meta.width, let height = meta.height
         {
-            return try await finishLoadVideo(
+            let video = try await finishLoadVideo(
                 url: url, fileSize: fileSize, modifiedAt: modifiedAt,
                 duration: duration, width: width, height: height,
                 thumbnailStore: thumbnailStore, metadataCache: cache
             )
+            return LoadedVideoMedia(video: video, metadataCacheHit: true)
         }
 
         let asset = AVURLAsset(url: url)
@@ -166,11 +194,12 @@ struct VideoScanner {
                 mediaKind: .video, duration: duration, width: width, height: height
             )
         }
-        return try await finishLoadVideo(
+        let video = try await finishLoadVideo(
             url: url, fileSize: fileSize, modifiedAt: modifiedAt,
             duration: duration, width: width, height: height,
             thumbnailStore: thumbnailStore, metadataCache: metadataCache
         )
+        return LoadedVideoMedia(video: video, metadataCacheHit: false)
     }
     /// Common tail — thumbnail lookup + MediaItem assembly — shared by the
     /// cache-hit and cache-miss paths in `loadVideo`.
@@ -233,7 +262,13 @@ private struct LoadedVideo: Sendable {
     let index: Int
     let url: URL
     let video: MediaItem?
+    let metadataCacheHit: Bool
     let issue: ScanIssue?
+}
+
+private struct LoadedVideoMedia: Sendable {
+    let video: MediaItem
+    let metadataCacheHit: Bool
 }
 
 enum ScannerError: Error {

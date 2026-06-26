@@ -54,6 +54,11 @@ final class SimilarityPipelineResilienceTests: XCTestCase {
 
         let hashingFractions = await progress.fractions(for: .hashing)
         XCTAssertTrue(hashingFractions.contains(1))
+        let hashingUpdates = await progress.updates(for: .hashing)
+        let finalHashing = try XCTUnwrap(hashingUpdates.last)
+        XCTAssertEqual(finalHashing.cacheKind, .fingerprint)
+        XCTAssertEqual(finalHashing.cacheHits, 2)
+        XCTAssertEqual(finalHashing.cacheTotal, 2)
     }
 
     private func video(path: String, size: Int64) -> MediaItem {
@@ -101,5 +106,9 @@ private actor VideoProgressRecorder {
 
     func fractions(for stage: ScanStage) -> [Double] {
         updates.filter { $0.stage == stage }.map(\.fraction)
+    }
+
+    func updates(for stage: ScanStage) -> [ScanProgress] {
+        updates.filter { $0.stage == stage }
     }
 }

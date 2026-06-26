@@ -101,6 +101,30 @@ final class ScanViewModelTests: XCTestCase {
         ])
     }
 
+    func testDefaultScannerUsesInjectedMetadataCache() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MetadataCacheScan-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let cachedVideo = root.appendingPathComponent("cached.mp4")
+        try Data([1, 2, 3]).write(to: cachedVideo)
+        let cache = MetadataHitCache()
+        let model = ScanViewModel(
+            pipeline: ExactDuplicatePipeline(),
+            hashCache: cache,
+            thumbnailStore: ThumbnailStore(directoryURL: root.appendingPathComponent("thumbs", isDirectory: true))
+        )
+        model.scanMode = .videos
+        model.selectedFolders = [root]
+
+        model.startScan()
+        try await waitUntil { model.progress.stage == .completed }
+
+        XCTAssertEqual(model.items.map { $0.url.standardizedFileURL.path }, [cachedVideo.standardizedFileURL.path])
+        let metadataLookups = await cache.metadataLookupCount()
+        XCTAssertEqual(metadataLookups, 1)
+    }
+
     func testDeletePromptStartsByChoosingMethod() {
         let model = ScanViewModel()
         model.requestDeletion(of: SimilarityScoringTests.video(name: "a.mov"))
@@ -822,5 +846,32 @@ private actor PruneRecordingCache: HashCaching {
 
     func lastPrunedPaths() -> Set<String>? {
         prunedPaths
+    }
+}
+
+private actor MetadataHitCache: HashCaching {
+    private(set) var metadataLookups = 0
+
+    func lookup(filePath: String, fileSize: Int64, modifiedAt: Date?, mediaKind: MediaKind, algorithmVersion: String) -> CacheRecord? {
+        nil
+    }
+
+    func upsert(_ record: CacheRecord) {}
+
+    func pruneStale(validPaths: Set<String>) {}
+
+    func count() -> Int { 0 }
+
+    func clearAll() {}
+
+    func sizeInBytes() -> Int64 { 0 }
+
+    func lookupMetadata(filePath: String, fileSize: Int64, modifiedAt: Date?, mediaKind: MediaKind) -> (duration: Double?, width: Int?, height: Int?)? {
+        metadataLookups += 1
+        return mediaKind == .video ? (duration: 12, width: 1920, height: 1080) : nil
+    }
+
+    func metadataLookupCount() -> Int {
+        metadataLookups
     }
 }

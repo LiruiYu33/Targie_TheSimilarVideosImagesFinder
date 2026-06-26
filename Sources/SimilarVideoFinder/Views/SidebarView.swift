@@ -115,7 +115,7 @@ struct SidebarView: View {
             ProgressView(value: model.progress.fraction) {
                 Text(L10n.scanStage(model.progress.stage, language))
             } currentValueLabel: {
-                Text(model.progress.currentFile)
+                Text(L10n.scanProgressDetail(model.progress, language))
                     .lineLimit(1)
             }
             Button(role: .cancel, action: model.cancelScan) {

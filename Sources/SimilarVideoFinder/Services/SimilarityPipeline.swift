@@ -254,6 +254,7 @@ struct SimilarityPipeline: SimilarityProcessing {
         progress: @escaping @Sendable (ScanProgress) async -> Void
     ) async throws -> [UUID: VideoPerceptualHash] {
         let total = max(videos.count, 1)
+        let cacheTotal = videos.count
         let counter = ProgressCounter()
 
         // ---- 阶段 1: 缓存命中过滤 ----
@@ -279,12 +280,15 @@ struct SimilarityPipeline: SimilarityProcessing {
         for _ in cached.indices {
             _ = await counter.increment()
         }
-        if !cached.isEmpty {
+        if cache != nil, cacheTotal > 0 {
             await progress(ScanProgress(
                 stage: .hashing,
                 fraction: Double(cached.count) / Double(total),
                 currentFile: "",
-                discoveredCount: total
+                discoveredCount: total,
+                cacheHits: cached.count,
+                cacheTotal: cacheTotal,
+                cacheKind: .fingerprint
             ))
         }
 
@@ -315,7 +319,10 @@ struct SimilarityPipeline: SimilarityProcessing {
                     stage: .hashing,
                     fraction: Double(done) / Double(total),
                     currentFile: video?.filename ?? "",
-                    discoveredCount: total
+                    discoveredCount: total,
+                    cacheHits: cached.count,
+                    cacheTotal: cacheTotal,
+                    cacheKind: cache != nil && cacheTotal > 0 ? .fingerprint : nil
                 ))
 
                 if let next = iterator.next() {

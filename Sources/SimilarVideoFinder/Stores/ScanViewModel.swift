@@ -133,13 +133,13 @@ final class ScanViewModel: ObservableObject {
         self.thumbnailStore = thumbnailStore
         self.pipeline = pipeline ?? SimilarityPipeline(cache: hashCache)
         self.imagePipeline = ImageSimilarityPipeline(cache: hashCache)
-        // Use caller-provided scanners, but if they used the default (no-cache)
-        // ones, replace with cache-equipped versions so re-scan skips AVFoundation.
-        self.scanner = scanner.metadataCache == nil
-            ? VideoScanner(maxConcurrentLoads: scanner.maxConcurrentLoads, thumbnailStore: thumbnailStore, metadataCache: hashCache, loader: scanner.loader)
+        // Use caller-provided scanners, but if they used the default loader,
+        // replace it with a cache-equipped default so re-scan skips media I/O.
+        self.scanner = scanner.metadataCache == nil && scanner.usesDefaultLoader
+            ? VideoScanner(maxConcurrentLoads: scanner.maxConcurrentLoads, thumbnailStore: thumbnailStore, metadataCache: hashCache)
             : scanner
-        self.imageScanner = imageScanner.metadataCache == nil
-            ? ImageScanner(maxConcurrentLoads: imageScanner.maxConcurrentLoads, thumbnailStore: thumbnailStore, metadataCache: hashCache, loader: imageScanner.loader)
+        self.imageScanner = imageScanner.metadataCache == nil && imageScanner.usesDefaultLoader
+            ? ImageScanner(maxConcurrentLoads: imageScanner.maxConcurrentLoads, thumbnailStore: thumbnailStore, metadataCache: hashCache)
             : imageScanner
     }
 
