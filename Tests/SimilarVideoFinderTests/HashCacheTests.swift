@@ -147,6 +147,127 @@ final class HashCacheTests: XCTestCase {
         XCTAssertNotNil(result)
     }
 
+    func testMoveLookupDoesNotReusePerceptualHashWithoutContentProof() async throws {
+        let date = Date(timeIntervalSince1970: 5_000)
+        let current = try writeFixture(named: "current.mp4", data: Data("BBBB".utf8), modifiedAt: date)
+        let oldPath = tempDir.appendingPathComponent("old.mp4").path
+        await cache.upsert(makeRecord(path: oldPath, size: 4, date: date))
+
+        let result = await cache.lookup(filePath: current.path, fileSize: 4, modifiedAt: date)
+
+        XCTAssertNil(result)
+    }
+
+    func testMoveLookupReusesPerceptualHashWhenSHA256Matches() async throws {
+        let date = Date(timeIntervalSince1970: 5_050)
+        let data = Data("SAME".utf8)
+        let current = try writeFixture(named: "moved-current.mp4", data: data, modifiedAt: date)
+        let oldPath = tempDir.appendingPathComponent("moved-old.mp4").path
+        let oldSHA = try await FileHasher.sha256(of: current)
+        await cache.upsert(makeRecord(path: oldPath, size: Int64(data.count), date: date))
+        await cache.upsertMetadata(
+            filePath: oldPath,
+            fileSize: Int64(data.count),
+            modifiedAt: date,
+            mediaKind: .video,
+            duration: nil,
+            width: nil,
+            height: nil
+        )
+        await cache.upsertSHA256(filePath: oldPath, fileSize: Int64(data.count), modifiedAt: date, sha256: oldSHA)
+
+        let result = await cache.lookup(filePath: current.path, fileSize: Int64(data.count), modifiedAt: date)
+
+        XCTAssertNotNil(result)
+        XCTAssertEqual(result?.filePath, current.path)
+    }
+
+    func testMoveMetadataLookupDoesNotReuseMetadataWhenSHA256DoesNotMatch() async throws {
+        let date = Date(timeIntervalSince1970: 5_100)
+        let current = try writeFixture(named: "current-metadata.mp4", data: Data("BBBB".utf8), modifiedAt: date)
+        let oldPath = tempDir.appendingPathComponent("old-metadata.mp4").path
+        await cache.upsertMetadata(
+            filePath: oldPath,
+            fileSize: 4,
+            modifiedAt: date,
+            mediaKind: .video,
+            duration: 12,
+            width: 1920,
+            height: 1080
+        )
+        await cache.upsertSHA256(filePath: oldPath, fileSize: 4, modifiedAt: date, sha256: "not-the-current-file")
+
+        let result = await cache.lookupMetadata(filePath: current.path, fileSize: 4, modifiedAt: date, mediaKind: .video)
+
+        XCTAssertNil(result)
+    }
+
+    func testMoveSHA256LookupDoesNotReturnHashForDifferentContent() async throws {
+        let date = Date(timeIntervalSince1970: 5_200)
+        let current = try writeFixture(named: "current-sha.mp4", data: Data("BBBB".utf8), modifiedAt: date)
+        let oldPath = tempDir.appendingPathComponent("old-sha.mp4").path
+        await cache.upsertMetadata(
+            filePath: oldPath,
+            fileSize: 4,
+            modifiedAt: date,
+            mediaKind: .video,
+            duration: nil,
+            width: nil,
+            height: nil
+        )
+        await cache.upsertSHA256(filePath: oldPath, fileSize: 4, modifiedAt: date, sha256: "not-the-current-file")
+
+        let result = await cache.lookupSHA256(filePath: current.path, fileSize: 4, modifiedAt: date)
+
+        XCTAssertNil(result)
+    }
+
+    func testMoveImageFeatureLookupDoesNotReuseFeatureWithoutContentProof() async throws {
+        let date = Date(timeIntervalSince1970: 5_300)
+        let current = try writeFixture(named: "current-feature.jpg", data: Data("BBBB".utf8), modifiedAt: date)
+        let oldPath = tempDir.appendingPathComponent("old-feature.jpg").path
+        await cache.upsertImageFeature(filePath: oldPath, fileSize: 4, modifiedAt: date, featureData: Data([1, 2, 3]))
+
+        let result = await cache.lookupImageFeature(filePath: current.path, fileSize: 4, modifiedAt: date)
+
+        XCTAssertNil(result)
+    }
+
+    func testDetectMoveDoesNotReportOldPathWithoutContentProof() async throws {
+        let date = Date(timeIntervalSince1970: 5_400)
+        let current = try writeFixture(named: "current-thumbnail.jpg", data: Data("BBBB".utf8), modifiedAt: date)
+        let oldPath = tempDir.appendingPathComponent("old-thumbnail.jpg").path
+        await cache.upsertMetadata(
+            filePath: oldPath,
+            fileSize: 4,
+            modifiedAt: date,
+            mediaKind: .image,
+            duration: nil,
+            width: 40,
+            height: 20
+        )
+
+        let result = await cache.detectMove(
+            filePath: current.path,
+            fileSize: 4,
+            modifiedAt: date,
+            mediaKind: .image,
+            algorithmVersion: "image-phash-v1"
+        )
+
+        XCTAssertNil(result)
+    }
+
+    func testUpsertSHA256CreatesMetadataWithVideoKind() async {
+        let date = Date(timeIntervalSince1970: 5_500)
+        let path = tempDir.appendingPathComponent("sha-only.mp4").path
+
+        await cache.upsertSHA256(filePath: path, fileSize: 4, modifiedAt: date, sha256: "abc")
+
+        let metadata = await cache.lookupMetadata(filePath: path, fileSize: 4, modifiedAt: date, mediaKind: .video)
+        XCTAssertNotNil(metadata)
+    }
+
     // MARK: - Pruning
 
     func testPruneStaleRemovesNonValidEntries() async {
@@ -280,5 +401,12 @@ final class HashCacheTests: XCTestCase {
             prehashThumbnailMean: 128,
             prehashThumbnailVariance: 1000
         )
+    }
+
+    private func writeFixture(named name: String, data: Data, modifiedAt: Date) throws -> URL {
+        let url = tempDir.appendingPathComponent(name)
+        try data.write(to: url)
+        try FileManager.default.setAttributes([.modificationDate: modifiedAt], ofItemAtPath: url.path)
+        return url
     }
 }

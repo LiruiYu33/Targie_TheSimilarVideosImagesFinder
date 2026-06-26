@@ -42,6 +42,14 @@ struct CacheRecord: Codable, Sendable, FetchableRecord, PersistableRecord {
     static var databaseTableName: String { "hash_cache" }
 }
 
+private protocol FilePathCacheRecord {
+    var filePath: String { get }
+    var fileSize: Int64 { get }
+    var modifiedAt: Date? { get }
+}
+
+extension CacheRecord: FilePathCacheRecord {}
+
 // MARK: - MediaMetadata (avoids re-reading AVFoundation on re-scan)
 
 /// Cached video/image metadata so `loadVideo`/`loadImage` can skip AVFoundation /
@@ -59,6 +67,8 @@ struct MediaMetadata: Codable, Sendable, FetchableRecord, PersistableRecord {
     static var databaseTableName: String { "media_metadata" }
 }
 
+extension MediaMetadata: FilePathCacheRecord {}
+
 // MARK: - ImageFeatureRecord (avoids re-running Vision on re-scan)
 
 /// Persisted `VNFeaturePrintObservation` blob so the image comparison phase
@@ -71,6 +81,8 @@ struct ImageFeatureRecord: Codable, Sendable, FetchableRecord, PersistableRecord
 
     static var databaseTableName: String { "image_features" }
 }
+
+extension ImageFeatureRecord: FilePathCacheRecord {}
 
 // MARK: - HashCache Protocol
 
@@ -91,8 +103,8 @@ protocol HashCaching: Sendable {
 
     // SHA-256 file hash cache — avoids re-reading every byte of same-size files
     // on every re-scan.
-    func upsertSHA256(filePath: String, fileSize: Int64, modifiedAt: Date?, sha256: String) async
-    func lookupSHA256(filePath: String, fileSize: Int64, modifiedAt: Date?) async -> String?
+    func upsertSHA256(filePath: String, fileSize: Int64, modifiedAt: Date?, mediaKind: MediaKind, sha256: String) async
+    func lookupSHA256(filePath: String, fileSize: Int64, modifiedAt: Date?, mediaKind: MediaKind) async -> String?
 
     // Image feature cache — persists VNFeaturePrintObservation so the comparing
     // phase skips Vision neural-network inference on re-scan.
@@ -114,8 +126,16 @@ extension HashCaching {
     func upsertMetadata(filePath: String, fileSize: Int64, modifiedAt: Date?, mediaKind: MediaKind, duration: Double?, width: Int?, height: Int?) async {}
     func lookupMetadata(filePath: String, fileSize: Int64, modifiedAt: Date?, mediaKind: MediaKind) async -> (duration: Double?, width: Int?, height: Int?)? { nil }
 
-    func upsertSHA256(filePath: String, fileSize: Int64, modifiedAt: Date?, sha256: String) async {}
-    func lookupSHA256(filePath: String, fileSize: Int64, modifiedAt: Date?) async -> String? { nil }
+    func upsertSHA256(filePath: String, fileSize: Int64, modifiedAt: Date?, mediaKind: MediaKind, sha256: String) async {}
+    func lookupSHA256(filePath: String, fileSize: Int64, modifiedAt: Date?, mediaKind: MediaKind) async -> String? { nil }
+
+    func upsertSHA256(filePath: String, fileSize: Int64, modifiedAt: Date?, sha256: String) async {
+        await upsertSHA256(filePath: filePath, fileSize: fileSize, modifiedAt: modifiedAt, mediaKind: .video, sha256: sha256)
+    }
+
+    func lookupSHA256(filePath: String, fileSize: Int64, modifiedAt: Date?) async -> String? {
+        await lookupSHA256(filePath: filePath, fileSize: fileSize, modifiedAt: modifiedAt, mediaKind: .video)
+    }
 
     func upsertImageFeature(filePath: String, fileSize: Int64, modifiedAt: Date?, featureData: Data) async {}
     func lookupImageFeature(filePath: String, fileSize: Int64, modifiedAt: Date?) async -> Data? { nil }
@@ -144,13 +164,13 @@ actor HashCache: HashCaching {
 
     // MARK: - Public API
 
-    func lookup(filePath: String, fileSize: Int64, modifiedAt: Date?, mediaKind: MediaKind, algorithmVersion: String) -> CacheRecord? {
+    func lookup(filePath: String, fileSize: Int64, modifiedAt: Date?, mediaKind: MediaKind, algorithmVersion: String) async -> CacheRecord? {
         // Primary lookup by path.
         if let primary = primaryCacheLookup(filePath: filePath, fileSize: fileSize, modifiedAt: modifiedAt, mediaKind: mediaKind, algorithmVersion: algorithmVersion) {
             return primary
         }
-        // Secondary lookup by file properties — catches files moved to a new folder.
-        return moveLookup(filePath: filePath, fileSize: fileSize, modifiedAt: modifiedAt, mediaKind: mediaKind, algorithmVersion: algorithmVersion)
+        // Secondary lookup only after content identity proves the file moved.
+        return await moveLookup(filePath: filePath, fileSize: fileSize, modifiedAt: modifiedAt, mediaKind: mediaKind, algorithmVersion: algorithmVersion)
     }
 
     private func primaryCacheLookup(filePath: String, fileSize: Int64, modifiedAt: Date?, mediaKind: MediaKind, algorithmVersion: String) -> CacheRecord? {
@@ -169,26 +189,28 @@ actor HashCache: HashCaching {
     }
 
     /// When a file moves to a different folder its old cache entry still exists under
-    /// the previous path.  Look for a record with matching (fileSize, modifiedAt, kind,
-    /// algorithm) but a *different* filePath, and — critically — verify that the old
-    /// path no longer exists on disk (otherwise it's a copy, not a move, and the cache
-    /// must not be shared).  If found, atomically update the path so subsequent lookups
-    /// hit the primary key directly.
-    private func moveLookup(filePath: String, fileSize: Int64, modifiedAt: Date?, mediaKind: MediaKind, algorithmVersion: String) -> CacheRecord? {
-        guard let candidate = try? dbQueue.read({ db in
+    /// the previous path. Reuse it only when the old path is gone and a persisted
+    /// SHA-256 proves the old cache record belongs to the current file.
+    private func moveLookup(filePath: String, fileSize: Int64, modifiedAt: Date?, mediaKind: MediaKind, algorithmVersion: String) async -> CacheRecord? {
+        let candidates = (try? await dbQueue.read { db in
             try CacheRecord
                 .filter(Column("fileSize") == fileSize)
                 .filter(Column("mediaKind") == mediaKind.rawValue)
                 .filter(Column("algorithmVersion") == algorithmVersion)
                 .filter(Column("filePath") != filePath)
-                .fetchOne(db)
-        }), modifiedAtMatches(candidate.modifiedAt, modifiedAt) else { return nil }
-
-        // Only reuse when the old file is truly gone (moved, not copied).
-        guard !FileManager.default.fileExists(atPath: candidate.filePath) else { return nil }
+                .order(Column("filePath"))
+                .fetchAll(db)
+        }) ?? []
+        guard let candidate = await verifiedMovedRecord(
+            candidates,
+            to: filePath,
+            fileSize: fileSize,
+            modifiedAt: modifiedAt,
+            mediaKind: mediaKind
+        ) else { return nil }
 
         // Atomically relocate the record to the new path.
-        try? dbQueue.write { db in
+        try? await dbQueue.write { db in
             try db.execute(sql: "UPDATE hash_cache SET filePath = ? WHERE filePath = ?",
                            arguments: [filePath, candidate.filePath])
         }
@@ -212,20 +234,26 @@ actor HashCache: HashCaching {
     /// Read-only variant of move detection: returns the old path of a moved file
     /// WITHOUT updating any cache record.  Queries `media_metadata` (which has
     /// entries for *every* scanned file, not just those in candidate pairs) so
-    /// thumbnail migration covers all files — not just similar ones.
+    /// thumbnail migration covers all files — not just similar ones. The move
+    /// still requires stored SHA-256 proof; otherwise the caller should regenerate.
     /// `algorithmVersion` is ignored (metadata table has no concept of version);
     /// kept on the protocol for source compatibility.
-    func detectMove(filePath: String, fileSize: Int64, modifiedAt: Date?, mediaKind: MediaKind, algorithmVersion: String) -> String? {
-        guard let candidate = try? dbQueue.read({ db in
+    func detectMove(filePath: String, fileSize: Int64, modifiedAt: Date?, mediaKind: MediaKind, algorithmVersion: String) async -> String? {
+        let candidates = (try? await dbQueue.read { db in
             try MediaMetadata
                 .filter(Column("fileSize") == fileSize)
                 .filter(Column("mediaKind") == mediaKind.rawValue)
                 .filter(Column("filePath") != filePath)
-                .fetchOne(db)
-        }), modifiedAtMatches(candidate.modifiedAt, modifiedAt) else { return nil }
-
-        guard !FileManager.default.fileExists(atPath: candidate.filePath) else { return nil }
-        return candidate.filePath
+                .order(Column("filePath"))
+                .fetchAll(db)
+        }) ?? []
+        return await verifiedMovedRecord(
+            candidates,
+            to: filePath,
+            fileSize: fileSize,
+            modifiedAt: modifiedAt,
+            mediaKind: mediaKind
+        )?.filePath
     }
 
     func upsert(_ record: CacheRecord) {
@@ -275,13 +303,13 @@ actor HashCache: HashCaching {
         }
     }
 
-    func lookupMetadata(filePath: String, fileSize: Int64, modifiedAt: Date?, mediaKind: MediaKind) -> (duration: Double?, width: Int?, height: Int?)? {
+    func lookupMetadata(filePath: String, fileSize: Int64, modifiedAt: Date?, mediaKind: MediaKind) async -> (duration: Double?, width: Int?, height: Int?)? {
         // Primary path lookup.
         if let primary = primaryMetadataLookup(filePath: filePath, fileSize: fileSize, modifiedAt: modifiedAt, mediaKind: mediaKind) {
             return primary
         }
-        // Move support — file may have been relocated to a different folder.
-        return moveMetadataLookup(filePath: filePath, fileSize: fileSize, modifiedAt: modifiedAt, mediaKind: mediaKind)
+        // Move support — only reuse after SHA-256 confirms content identity.
+        return await moveMetadataLookup(filePath: filePath, fileSize: fileSize, modifiedAt: modifiedAt, mediaKind: mediaKind)
     }
 
     private func primaryMetadataLookup(filePath: String, fileSize: Int64, modifiedAt: Date?, mediaKind: MediaKind) -> (duration: Double?, width: Int?, height: Int?)? {
@@ -297,18 +325,24 @@ actor HashCache: HashCaching {
         }
     }
 
-    private func moveMetadataLookup(filePath: String, fileSize: Int64, modifiedAt: Date?, mediaKind: MediaKind) -> (duration: Double?, width: Int?, height: Int?)? {
-        guard let candidate = try? dbQueue.read({ db in
+    private func moveMetadataLookup(filePath: String, fileSize: Int64, modifiedAt: Date?, mediaKind: MediaKind) async -> (duration: Double?, width: Int?, height: Int?)? {
+        let candidates = (try? await dbQueue.read { db in
             try MediaMetadata
                 .filter(Column("fileSize") == fileSize)
                 .filter(Column("mediaKind") == mediaKind.rawValue)
                 .filter(Column("filePath") != filePath)
-                .fetchOne(db)
-        }), modifiedAtMatches(candidate.modifiedAt, modifiedAt),
-              !FileManager.default.fileExists(atPath: candidate.filePath)
-        else { return nil }
+                .order(Column("filePath"))
+                .fetchAll(db)
+        }) ?? []
+        guard let candidate = await verifiedMovedRecord(
+            candidates,
+            to: filePath,
+            fileSize: fileSize,
+            modifiedAt: modifiedAt,
+            mediaKind: mediaKind
+        ) else { return nil }
 
-        try? dbQueue.write { db in
+        try? await dbQueue.write { db in
             try db.execute(sql: "UPDATE media_metadata SET filePath = ? WHERE filePath = ?",
                            arguments: [filePath, candidate.filePath])
         }
@@ -317,49 +351,63 @@ actor HashCache: HashCaching {
 
     // MARK: - SHA-256 Cache
 
-    func upsertSHA256(filePath: String, fileSize: Int64, modifiedAt: Date?, sha256: String) {
+    func upsertSHA256(filePath: String, fileSize: Int64, modifiedAt: Date?, mediaKind: MediaKind, sha256: String) {
         try? dbQueue.write { db in
             try db.execute(sql: """
                 INSERT INTO media_metadata (filePath, fileSize, modifiedAt, mediaKind, sha256)
-                VALUES (?, ?, ?, '', ?)
-                ON CONFLICT(filePath) DO UPDATE SET sha256 = excluded.sha256
-                """, arguments: [filePath, fileSize, modifiedAt, sha256])
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(filePath) DO UPDATE SET
+                    fileSize = excluded.fileSize,
+                    modifiedAt = excluded.modifiedAt,
+                    mediaKind = CASE
+                        WHEN media_metadata.mediaKind = '' THEN excluded.mediaKind
+                        ELSE media_metadata.mediaKind
+                    END,
+                    sha256 = excluded.sha256
+                """, arguments: [filePath, fileSize, modifiedAt, mediaKind.rawValue, sha256])
         }
     }
 
-    func lookupSHA256(filePath: String, fileSize: Int64, modifiedAt: Date?) -> String? {
+    func lookupSHA256(filePath: String, fileSize: Int64, modifiedAt: Date?, mediaKind: MediaKind) async -> String? {
         // Primary path lookup.
-        if let sha = primarySHA256Lookup(filePath: filePath, fileSize: fileSize, modifiedAt: modifiedAt) {
+        if let sha = primarySHA256Lookup(filePath: filePath, fileSize: fileSize, modifiedAt: modifiedAt, mediaKind: mediaKind) {
             return sha
         }
-        // Move support.
-        return moveSHA256Lookup(filePath: filePath, fileSize: fileSize, modifiedAt: modifiedAt)
+        // Move support — only reuse after SHA-256 confirms content identity.
+        return await moveSHA256Lookup(filePath: filePath, fileSize: fileSize, modifiedAt: modifiedAt, mediaKind: mediaKind)
     }
 
-    private func primarySHA256Lookup(filePath: String, fileSize: Int64, modifiedAt: Date?) -> String? {
+    private func primarySHA256Lookup(filePath: String, fileSize: Int64, modifiedAt: Date?, mediaKind: MediaKind) -> String? {
         try? dbQueue.read { db in
             guard let record = try MediaMetadata
                 .filter(Column("filePath") == filePath)
                 .filter(Column("fileSize") == fileSize)
                 .fetchOne(db),
+                record.mediaKind.isEmpty || record.mediaKind == mediaKind.rawValue,
                 modifiedAtMatches(record.modifiedAt, modifiedAt)
             else { return nil }
             return record.sha256
         }
     }
 
-    private func moveSHA256Lookup(filePath: String, fileSize: Int64, modifiedAt: Date?) -> String? {
-        guard let candidate = try? dbQueue.read({ db in
+    private func moveSHA256Lookup(filePath: String, fileSize: Int64, modifiedAt: Date?, mediaKind: MediaKind) async -> String? {
+        let candidates = (try? await dbQueue.read { db in
             try MediaMetadata
                 .filter(Column("fileSize") == fileSize)
+                .filter(Column("mediaKind") == mediaKind.rawValue)
                 .filter(Column("filePath") != filePath)
-                .fetchOne(db)
-        }), let sha = candidate.sha256, !sha.isEmpty,
-              modifiedAtMatches(candidate.modifiedAt, modifiedAt),
-              !FileManager.default.fileExists(atPath: candidate.filePath)
-        else { return nil }
+                .order(Column("filePath"))
+                .fetchAll(db)
+        }) ?? []
+        guard let candidate = await verifiedMovedRecord(
+            candidates,
+            to: filePath,
+            fileSize: fileSize,
+            modifiedAt: modifiedAt,
+            mediaKind: mediaKind
+        ), let sha = candidate.sha256, !sha.isEmpty else { return nil }
 
-        try? dbQueue.write { db in
+        try? await dbQueue.write { db in
             try db.execute(sql: "UPDATE media_metadata SET filePath = ? WHERE filePath = ?",
                            arguments: [filePath, candidate.filePath])
         }
@@ -380,13 +428,13 @@ actor HashCache: HashCaching {
         }
     }
 
-    func lookupImageFeature(filePath: String, fileSize: Int64, modifiedAt: Date?) -> Data? {
+    func lookupImageFeature(filePath: String, fileSize: Int64, modifiedAt: Date?) async -> Data? {
         // Primary path lookup.
         if let data = primaryImageFeatureLookup(filePath: filePath, fileSize: fileSize, modifiedAt: modifiedAt) {
             return data
         }
-        // Move support.
-        return moveImageFeatureLookup(filePath: filePath, fileSize: fileSize, modifiedAt: modifiedAt)
+        // Move support — only reuse after SHA-256 confirms content identity.
+        return await moveImageFeatureLookup(filePath: filePath, fileSize: fileSize, modifiedAt: modifiedAt)
     }
 
     private func primaryImageFeatureLookup(filePath: String, fileSize: Int64, modifiedAt: Date?) -> Data? {
@@ -401,17 +449,23 @@ actor HashCache: HashCaching {
         }
     }
 
-    private func moveImageFeatureLookup(filePath: String, fileSize: Int64, modifiedAt: Date?) -> Data? {
-        guard let candidate = try? dbQueue.read({ db in
+    private func moveImageFeatureLookup(filePath: String, fileSize: Int64, modifiedAt: Date?) async -> Data? {
+        let candidates = (try? await dbQueue.read { db in
             try ImageFeatureRecord
                 .filter(Column("fileSize") == fileSize)
                 .filter(Column("filePath") != filePath)
-                .fetchOne(db)
-        }), modifiedAtMatches(candidate.modifiedAt, modifiedAt),
-              !FileManager.default.fileExists(atPath: candidate.filePath)
-        else { return nil }
+                .order(Column("filePath"))
+                .fetchAll(db)
+        }) ?? []
+        guard let candidate = await verifiedMovedRecord(
+            candidates,
+            to: filePath,
+            fileSize: fileSize,
+            modifiedAt: modifiedAt,
+            mediaKind: .image
+        ) else { return nil }
 
-        try? dbQueue.write { db in
+        try? await dbQueue.write { db in
             try db.execute(sql: "UPDATE image_features SET filePath = ? WHERE filePath = ?",
                            arguments: [filePath, candidate.filePath])
         }
@@ -425,6 +479,48 @@ actor HashCache: HashCaching {
             return abs(a.timeIntervalSince(b)) < 1.0
         }
         return cached == nil && current == nil
+    }
+
+    private func verifiedMovedRecord<T: FilePathCacheRecord>(
+        _ candidates: [T],
+        to filePath: String,
+        fileSize: Int64,
+        modifiedAt: Date?,
+        mediaKind: MediaKind
+    ) async -> T? {
+        let viable = candidates.filter {
+            modifiedAtMatches($0.modifiedAt, modifiedAt) &&
+            !FileManager.default.fileExists(atPath: $0.filePath)
+        }
+        guard !viable.isEmpty,
+              let currentSHA = try? await FileHasher.sha256(of: URL(fileURLWithPath: filePath))
+        else { return nil }
+
+        for candidate in viable {
+            guard let cachedSHA = cachedSHA256ForMove(
+                oldPath: candidate.filePath,
+                fileSize: fileSize,
+                modifiedAt: modifiedAt,
+                mediaKind: mediaKind
+            ), cachedSHA == currentSHA else { continue }
+            return candidate
+        }
+        return nil
+    }
+
+    private func cachedSHA256ForMove(oldPath: String, fileSize: Int64, modifiedAt: Date?, mediaKind: MediaKind) -> String? {
+        try? dbQueue.read { db in
+            guard let record = try MediaMetadata
+                .filter(Column("filePath") == oldPath)
+                .filter(Column("fileSize") == fileSize)
+                .filter(Column("mediaKind") == mediaKind.rawValue)
+                .fetchOne(db),
+                modifiedAtMatches(record.modifiedAt, modifiedAt),
+                let sha = record.sha256,
+                !sha.isEmpty
+            else { return nil }
+            return sha
+        }
     }
 
     func sizeInBytes() -> Int64 {
@@ -580,11 +676,11 @@ actor InMemoryHashCache: HashCaching {
         metadata[filePath]
     }
 
-    func upsertSHA256(filePath: String, fileSize: Int64, modifiedAt: Date?, sha256: String) async {
+    func upsertSHA256(filePath: String, fileSize: Int64, modifiedAt: Date?, mediaKind: MediaKind, sha256: String) async {
         sha256Store[filePath] = sha256
     }
 
-    func lookupSHA256(filePath: String, fileSize: Int64, modifiedAt: Date?) async -> String? {
+    func lookupSHA256(filePath: String, fileSize: Int64, modifiedAt: Date?, mediaKind: MediaKind) async -> String? {
         sha256Store[filePath]
     }
 

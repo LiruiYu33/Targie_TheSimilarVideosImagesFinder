@@ -279,6 +279,14 @@ struct SimilarityPipeline: SimilarityProcessing {
         for _ in cached.indices {
             _ = await counter.increment()
         }
+        if !cached.isEmpty {
+            await progress(ScanProgress(
+                stage: .hashing,
+                fraction: Double(cached.count) / Double(total),
+                currentFile: "",
+                discoveredCount: total
+            ))
+        }
 
         // ---- 阶段 2: 并行计算未命中的哈希 ----
         let concurrencyCap = Self.hashConcurrencyLimit(
@@ -340,7 +348,7 @@ struct SimilarityPipeline: SimilarityProcessing {
 
     private func fileSHA256(for video: MediaItem, cache: inout [UUID: String]) async throws -> String {
         if let cached = cache[video.id] { return cached }
-        let value = try await FileHasher.sha256(of: video.url, cache: self.cache)
+        let value = try await FileHasher.sha256(of: video.url, mediaKind: .video, cache: self.cache)
         cache[video.id] = value
         return value
     }

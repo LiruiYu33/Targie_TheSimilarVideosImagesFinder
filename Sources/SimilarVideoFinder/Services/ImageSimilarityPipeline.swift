@@ -46,8 +46,8 @@ struct ImageSimilarityPipeline: Sendable {
                 let perceptual = hash.similarity(to: neighbor.item)
                 var exact = false
                 if image.fileSize > 0 && image.fileSize == other.fileSize && neighbor.dist == 0,
-                   let firstHash = try? await FileHasher.sha256(of: image.url, cache: cache),
-                   let secondHash = try? await FileHasher.sha256(of: other.url, cache: cache) {
+                   let firstHash = try? await FileHasher.sha256(of: image.url, mediaKind: .image, cache: cache),
+                   let secondHash = try? await FileHasher.sha256(of: other.url, mediaKind: .image, cache: cache) {
                     exact = firstHash == secondHash
                 }
                 try Task.checkCancellation()
@@ -71,6 +71,9 @@ struct ImageSimilarityPipeline: Sendable {
             if let record = await cache?.lookup(filePath: image.url.path, fileSize: image.fileSize, modifiedAt: image.modifiedAt, mediaKind: .image, algorithmVersion: Self.algorithmVersion) {
                 hashes[image.id] = ImagePerceptualHash(mediaID: image.id, hashBits: Array(record.perceptualHash))
             } else { missing.append(image) }
+        }
+        if !hashes.isEmpty {
+            await progress(ScanProgress(stage: .hashing, fraction: images.isEmpty ? 1 : Double(hashes.count) / Double(images.count), discoveredCount: images.count))
         }
         try await withThrowingTaskGroup(of: (MediaItem, ImagePerceptualHash?).self) { group in
             var iterator = missing.makeIterator()
