@@ -118,6 +118,7 @@ final class ScanViewModel: ObservableObject {
     private let deletionService: any DeletionServicing
     private let hashCache: (any HashCaching)?
     private let thumbnailStore: ThumbnailStore
+    private var groupSelectionAnchorID: UUID?
 
     init(
         scanner: VideoScanner = VideoScanner(),
@@ -221,6 +222,7 @@ final class ScanViewModel: ObservableObject {
         allRelations = []
         groups = []
         checkedMediaIDs = []
+        groupSelectionAnchorID = nil
         issues = []
         scanTask = Task { [weak self] in
             guard let self else { return }
@@ -346,6 +348,7 @@ final class ScanViewModel: ObservableObject {
             selectedGroupID = nil
             selectedMediaID = nil
             sortedGroupItems = []
+            groupSelectionAnchorID = nil
         }
         checkedMediaIDs.formIntersection(visibleItemIDs(for: mode))
     }
@@ -382,6 +385,34 @@ final class ScanViewModel: ObservableObject {
         // Select the first item *under the current sort order*, not the
         // grouper's raw items order, so the highlight matches the visual.
         selectedMediaID = sortedGroupItems.first?.id
+        groupSelectionAnchorID = selectedMediaID
+    }
+
+    func selectGroupItem(_ id: UUID) {
+        selectedMediaID = id
+        groupSelectionAnchorID = id
+    }
+
+    func toggleGroupItemSelection(_ id: UUID) {
+        selectedMediaID = id
+        toggleChecked(id)
+    }
+
+    func extendGroupItemSelection(to id: UUID) {
+        let anchorID = groupSelectionAnchorID ?? selectedMediaID ?? id
+        selectedMediaID = id
+
+        guard
+            let anchorIndex = sortedGroupItems.firstIndex(where: { $0.id == anchorID }),
+            let targetIndex = sortedGroupItems.firstIndex(where: { $0.id == id })
+        else {
+            checkedMediaIDs.insert(id)
+            groupSelectionAnchorID = id
+            return
+        }
+
+        let range = min(anchorIndex, targetIndex)...max(anchorIndex, targetIndex)
+        checkedMediaIDs.formUnion(sortedGroupItems[range].map(\.id))
     }
 
     /// Recomputes `sortedGroupItems` from the currently selected group. Cheap
@@ -460,8 +491,17 @@ final class ScanViewModel: ObservableObject {
         if !selected.isEmpty { deletePrompt = DeletePrompt(media: selected, step: .choosingMethod) }
     }
 
+    func requestPreviewDeletion(defaultingTo media: MediaItem) {
+        if checkedMediaIDs.isEmpty {
+            requestDeletion(of: media)
+        } else {
+            requestCheckedDeletion()
+        }
+    }
+
     func toggleChecked(_ id: UUID) {
         if checkedMediaIDs.contains(id) { checkedMediaIDs.remove(id) } else { checkedMediaIDs.insert(id) }
+        groupSelectionAnchorID = id
     }
 
     func askForPermanentConfirmation() {
@@ -662,6 +702,7 @@ final class ScanViewModel: ObservableObject {
         selectedGroupID = nil
         selectedMediaID = nil
         sortedGroupItems = []
+        groupSelectionAnchorID = nil
     }
 
     private func resetResults() {
@@ -672,6 +713,7 @@ final class ScanViewModel: ObservableObject {
         selectedMediaID = nil
         sortedGroupItems = []
         checkedMediaIDs = []
+        groupSelectionAnchorID = nil
         progress = ScanProgress()
         issues = []
     }

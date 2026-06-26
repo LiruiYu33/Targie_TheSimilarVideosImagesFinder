@@ -19,6 +19,7 @@
 // If you reuse this code (modified or not), you must keep this notice
 // and credit the original author (Lirui Yu).
 
+import AppKit
 import SwiftUI
 
 struct GroupDetailView: View {
@@ -57,7 +58,7 @@ struct GroupDetailView: View {
                                     isChecked: model.checkedMediaIDs.contains(video.id),
                                     toggleChecked: { model.toggleChecked(video.id) }
                                 )
-                                .onTapGesture { model.selectedMediaID = video.id }
+                                .onTapGesture { handleCardTap(video) }
                             }
                         }
                     }
@@ -72,6 +73,17 @@ struct GroupDetailView: View {
             }
         }
         .navigationTitle(model.selectedGroup == nil ? L10n.mediaComparison(language) : L10n.similarMediaCount(model.selectedGroup!.items.count, language))
+    }
+
+    private func handleCardTap(_ video: MediaItem) {
+        let modifiers = NSEvent.modifierFlags
+        if modifiers.contains(.shift) {
+            model.extendGroupItemSelection(to: video.id)
+        } else if modifiers.contains(.command) {
+            model.toggleGroupItemSelection(video.id)
+        } else {
+            model.selectGroupItem(video.id)
+        }
     }
 }
 

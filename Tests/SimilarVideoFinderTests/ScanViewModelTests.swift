@@ -518,6 +518,35 @@ final class ScanViewModelTests: XCTestCase {
         XCTAssertTrue(model.groupSortAscending)
     }
 
+    func testCommandSelectingGroupItemTogglesCheckedItemWithoutClearingOthers() {
+        let model = sortableGroup()
+        let items = model.sortedGroupItems
+
+        model.toggleGroupItemSelection(items[0].id)
+        model.toggleGroupItemSelection(items[2].id)
+
+        XCTAssertEqual(model.checkedMediaIDs, [items[0].id, items[2].id])
+        XCTAssertEqual(model.selectedMediaID, items[2].id)
+
+        model.toggleGroupItemSelection(items[0].id)
+
+        XCTAssertEqual(model.checkedMediaIDs, [items[2].id])
+    }
+
+    func testShiftSelectingGroupItemChecksRangeFromAnchorInCurrentSortOrder() {
+        let model = sortableGroup()
+        model.groupSortField = .fileSize
+        model.groupSortAscending = false
+        let items = model.sortedGroupItems
+        XCTAssertEqual(items.map(\.filename), ["a.mov", "c.mov", "b.mov"])
+
+        model.selectGroupItem(items[1].id)
+        model.extendGroupItemSelection(to: items[2].id)
+
+        XCTAssertEqual(model.checkedMediaIDs, [items[1].id, items[2].id])
+        XCTAssertEqual(model.selectedMediaID, items[2].id)
+    }
+
     func testGroupSortRefreshesAfterSelectionOrRebuild() {
         // Cached sort must repopulate when the selected group changes and when
         // its contents change (e.g. a deletion), not just on sort-field edits.
@@ -590,6 +619,32 @@ final class ScanViewModelTests: XCTestCase {
         XCTAssertEqual(deletion.deletedURLs, [first.url, second.url])
         XCTAssertEqual(model.checkedMediaIDs, [second.id])
         XCTAssertNotNil(model.presentedError)
+    }
+
+    func testPreviewDeletionUsesCheckedItemsWhenAnyAreSelected() {
+        let first = SimilarityScoringTests.video(name: "a.mov")
+        let second = SimilarityScoringTests.video(name: "b.mov")
+        let relation = SimilarityRelation(firstID: first.id, secondID: second.id, score: 0.95, evidence: [.similarFrames])
+        let model = ScanViewModel()
+        model.replaceResultsForTesting(items: [first, second], relations: [relation])
+        model.toggleChecked(first.id)
+        model.toggleChecked(second.id)
+
+        model.requestPreviewDeletion(defaultingTo: first)
+
+        XCTAssertEqual(Set(model.deletePrompt?.media.map(\.id) ?? []), [first.id, second.id])
+    }
+
+    func testPreviewDeletionUsesCurrentItemWhenNothingIsChecked() {
+        let first = SimilarityScoringTests.video(name: "a.mov")
+        let second = SimilarityScoringTests.video(name: "b.mov")
+        let relation = SimilarityRelation(firstID: first.id, secondID: second.id, score: 0.95, evidence: [.similarFrames])
+        let model = ScanViewModel()
+        model.replaceResultsForTesting(items: [first, second], relations: [relation])
+
+        model.requestPreviewDeletion(defaultingTo: first)
+
+        XCTAssertEqual(model.deletePrompt?.media.map(\.id), [first.id])
     }
 
     func testCancellingImageStageShowsNoGroups() async throws {
