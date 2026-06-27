@@ -146,6 +146,27 @@ final class BrowseViewModelTests: XCTestCase {
         XCTAssertEqual(browse.displayedItems.map(\.id), [nested.id])
     }
 
+    func testLargeInitialBrowseComputesDefaultSortSynchronously() {
+        let items = (0..<600).map { index in
+            makeItem(
+                name: String(format: "clip-%04d.mov", 600 - index),
+                width: 1920,
+                height: 1080
+            )
+        }
+        let rawIDs = items.map(\.id)
+        let sortedIDs = items
+            .sorted { $0.filename.localizedStandardCompare($1.filename) == .orderedAscending }
+            .map(\.id)
+        XCTAssertNotEqual(rawIDs, sortedIDs)
+        let scanModel = ScanViewModel(hashCache: nil)
+        scanModel.replaceResultsForTesting(items: items, relations: [])
+
+        let browse = BrowseViewModel(scanModel: scanModel)
+
+        XCTAssertEqual(browse.displayedItems.map(\.id), sortedIDs)
+    }
+
     func testDeletingSelectedItemSelectsNextDisplayedItem() async throws {
         let first = makeItem(name: "a.mov", width: 1920, height: 1080)
         let second = makeItem(name: "b.mov", width: 1920, height: 1080)

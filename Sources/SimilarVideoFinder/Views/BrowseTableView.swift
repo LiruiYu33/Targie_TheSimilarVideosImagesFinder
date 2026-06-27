@@ -80,30 +80,26 @@ struct BrowseTableView: View {
 
                     Divider()
 
-                    List(selection: Binding<Set<UUID>>(
-                        get: { browseModel.selectedMediaIDs },
-                        set: { selection in updateSelection(selection) }
-                    )) {
-                        ForEach(browseModel.displayedItems) { item in
-                            BrowseTableRow(
-                                item: item,
-                                language: language,
-                                widths: widths,
-                                isSelected: browseModel.selectedMediaIDs.contains(item.id),
-                                isPrimary: browseModel.primarySelectedID == item.id,
-                                isBatchSelectionMode: browseModel.isBatchSelectionMode,
-                                isChecked: browseModel.selectedMediaIDs.contains(item.id),
-                                onToggleCheck: { browseModel.toggleMedia(item.id) },
-                                onShiftSelect: { browseModel.extendSelection(to: item.id) }
-                            )
-                            .padding(.horizontal, rowHorizontalPadding)
-                            .listRowInsets(EdgeInsets())
-                            .tag(item.id)
+                    ScrollView {
+                        LazyVStack(spacing: 0) {
+                            ForEach(Array(browseModel.displayedItems.enumerated()), id: \.element.id) { index, item in
+                                BrowseTableRow(
+                                    item: item,
+                                    language: language,
+                                    widths: widths,
+                                    isSelected: browseModel.selectedMediaIDs.contains(item.id),
+                                    isPrimary: browseModel.primarySelectedID == item.id,
+                                    isBatchSelectionMode: browseModel.isBatchSelectionMode,
+                                    isChecked: browseModel.selectedMediaIDs.contains(item.id),
+                                    isAlternating: !index.isMultiple(of: 2),
+                                    onToggleCheck: { browseModel.toggleMedia(item.id) },
+                                    onSelect: { selectRow(item.id) }
+                                )
+                                .padding(.horizontal, rowHorizontalPadding)
+                            }
                         }
                     }
                     .id(browseModel.sortVersion)
-                    .listStyle(.plain)
-                    .alternatingRowBackgrounds(.enabled)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
@@ -217,8 +213,19 @@ struct BrowseTableView: View {
         }
     }
 
-    private func updateSelection(_ selection: Set<UUID>) {
-        browseModel.replaceSelection(with: selection)
+    private func selectRow(_ id: UUID) {
+        let modifiers = NSEvent.modifierFlags
+        switch BrowseRowSelectionIntent.make(
+            isCommandPressed: modifiers.contains(.command),
+            isShiftPressed: modifiers.contains(.shift)
+        ) {
+        case .replace:
+            browseModel.selectMedia(id)
+        case .toggle:
+            browseModel.toggleMedia(id)
+        case .extend:
+            browseModel.extendSelection(to: id)
+        }
     }
 }
 
@@ -269,8 +276,13 @@ struct BrowseTableRow: View {
     let isPrimary: Bool
     let isBatchSelectionMode: Bool
     let isChecked: Bool
+    let isAlternating: Bool
     let onToggleCheck: () -> Void
-    let onShiftSelect: () -> Void
+    let onSelect: () -> Void
+
+    private static let alternateBackground = NSColor.alternatingContentBackgroundColors
+        .dropFirst()
+        .first ?? NSColor.controlBackgroundColor
 
     var body: some View {
         HStack(spacing: 0) {
@@ -329,6 +341,7 @@ struct BrowseTableRow: View {
         .font(.callout)
         .padding(.vertical, 4)
         .padding(.horizontal, 3)
+        .background(isAlternating ? Color(nsColor: Self.alternateBackground) : Color.clear)
         .overlay {
             RoundedRectangle(cornerRadius: 6)
                 .stroke(
@@ -337,7 +350,7 @@ struct BrowseTableRow: View {
                 )
         }
         .contentShape(Rectangle())
-        .simultaneousGesture(TapGesture().modifiers(.shift).onEnded(onShiftSelect))
+        .onTapGesture(perform: onSelect)
     }
 }
 
