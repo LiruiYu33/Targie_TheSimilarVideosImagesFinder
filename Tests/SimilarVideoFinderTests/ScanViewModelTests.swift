@@ -131,6 +131,17 @@ final class ScanViewModelTests: XCTestCase {
         XCTAssertEqual(model.deletePrompt?.step, .choosingMethod)
     }
 
+    func testRevealIssueOpensSkippedFileLocationInFinder() {
+        let deletion = FakeDeletionService()
+        let model = ScanViewModel(deletionService: deletion)
+        let skippedURL = URL(fileURLWithPath: "/tmp/TargieSkipped/broken.mp4")
+        let issue = ScanIssue(url: skippedURL, reason: .noVideoTrack)
+
+        model.revealIssue(issue)
+
+        XCTAssertEqual(deletion.revealedURLs, [skippedURL])
+    }
+
     func testSuccessfulDeletionDropsSingletonGroup() async {
         let a = SimilarityScoringTests.video(name: "a.mov")
         let b = SimilarityScoringTests.video(name: "b.mov")
@@ -571,6 +582,63 @@ final class ScanViewModelTests: XCTestCase {
         XCTAssertEqual(model.selectedMediaID, items[2].id)
     }
 
+    func testPlainSelectingGroupItemClearsCheckedSelection() {
+        let model = sortableGroup()
+        let items = model.sortedGroupItems
+        model.toggleGroupItemSelection(items[0].id)
+        model.toggleGroupItemSelection(items[1].id)
+
+        model.selectGroupItem(items[2].id)
+
+        XCTAssertTrue(model.checkedMediaIDs.isEmpty)
+        XCTAssertEqual(model.selectedMediaID, items[2].id)
+    }
+
+    func testClearingGroupItemSelectionKeepsPreviewedItemButClearsCheckedSelection() {
+        let model = sortableGroup()
+        let items = model.sortedGroupItems
+        model.toggleGroupItemSelection(items[0].id)
+        model.toggleGroupItemSelection(items[1].id)
+
+        model.clearGroupItemSelection()
+
+        XCTAssertTrue(model.checkedMediaIDs.isEmpty)
+        XCTAssertEqual(model.selectedMediaID, items[1].id)
+    }
+
+    func testRequestCheckedDeletionDoesNotClearCheckedSelection() {
+        let model = sortableGroup()
+        let items = model.sortedGroupItems
+        model.toggleGroupItemSelection(items[0].id)
+        model.toggleGroupItemSelection(items[1].id)
+
+        model.requestCheckedDeletion()
+
+        XCTAssertEqual(model.checkedMediaIDs, [items[0].id, items[1].id])
+        XCTAssertEqual(Set(model.deletePrompt?.media.map(\.id) ?? []), [items[0].id, items[1].id])
+    }
+
+    func testSelectingAnotherGroupClearsCheckedSelection() {
+        let a = SimilarityScoringTests.video(name: "a.mov")
+        let b = SimilarityScoringTests.video(name: "b.mov")
+        let c = SimilarityScoringTests.video(name: "c.mov")
+        let d = SimilarityScoringTests.video(name: "d.mov")
+        let relations = [
+            SimilarityRelation(firstID: a.id, secondID: b.id, score: 0.95, evidence: [.similarFrames]),
+            SimilarityRelation(firstID: c.id, secondID: d.id, score: 0.92, evidence: [.similarFrames])
+        ]
+        let model = ScanViewModel()
+        model.replaceResultsForTesting(items: [a, b, c, d], relations: relations)
+        model.selectGroup(model.groups[0].id)
+        model.toggleGroupItemSelection(a.id)
+        model.toggleGroupItemSelection(b.id)
+
+        model.selectGroup(model.groups[1].id)
+
+        XCTAssertTrue(model.checkedMediaIDs.isEmpty)
+        XCTAssertEqual(model.selectedGroupID, model.groups[1].id)
+    }
+
     func testGroupSortRefreshesAfterSelectionOrRebuild() {
         // Cached sort must repopulate when the selected group changes and when
         // its contents change (e.g. a deletion), not just on sort-field edits.
@@ -808,6 +876,7 @@ private struct ExactDuplicatePipeline: SimilarityProcessing {
 @MainActor
 private final class FakeDeletionService: DeletionServicing {
     var deletedURLs: [URL] = []
+    var revealedURLs: [URL] = []
     let failingURLs: Set<URL>
 
     init(failingURLs: Set<URL> = []) {
@@ -821,7 +890,10 @@ private final class FakeDeletionService: DeletionServicing {
         }
     }
 
-    func reveal(_ url: URL) {}
+    func reveal(_ url: URL) {
+        revealedURLs.append(url)
+    }
+
     func open(_ url: URL) {}
 }
 

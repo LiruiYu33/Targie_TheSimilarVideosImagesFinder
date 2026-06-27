@@ -30,39 +30,43 @@ struct GroupDetailView: View {
         Group {
             if let group = model.selectedGroup {
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 16) {
-                        HStack(alignment: .firstTextBaseline) {
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text(L10n.compareMedia(language))
-                                    .font(.title2.bold())
-                                Text(L10n.compareMediaHint(language))
-                                    .foregroundStyle(.secondary)
-                            }
-                            Spacer()
-                            if !model.checkedMediaIDs.isEmpty {
-                                Button(L10n.deleteSelected(model.checkedMediaIDs.count, language), action: model.requestCheckedDeletion)
-                            }
-                            Text(L10n.highestSimilarity(DisplayFormatters.percent(group.maximumScore), language))
-                                .font(.callout.weight(.medium))
-                            GroupSortMenu(model: model, language: language)
-                        }
+                    ZStack(alignment: .topLeading) {
+                        Color.clear
+                            .contentShape(Rectangle())
+                            .onTapGesture { model.clearGroupItemSelection() }
 
-                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 230), spacing: 14)], spacing: 14) {
-                            ForEach(model.sortedGroupItems) { video in
-                                VideoCardView(
-                                    video: video,
-                                    score: group.score(for: video.id),
-                                    evidence: group.evidence(for: video.id),
-                                    language: language,
-                                    isSelected: model.selectedMediaID == video.id,
-                                    isChecked: model.checkedMediaIDs.contains(video.id),
-                                    toggleChecked: { model.toggleChecked(video.id) }
-                                )
-                                .onTapGesture { handleCardTap(video) }
+                        VStack(alignment: .leading, spacing: 16) {
+                            HStack(alignment: .firstTextBaseline) {
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(L10n.compareMedia(language))
+                                        .font(.title2.bold())
+                                    Text(L10n.compareMediaHint(language))
+                                        .foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                ForEach(GroupDetailHeaderArrangement.actions(hasCheckedSelection: !model.checkedMediaIDs.isEmpty), id: \.self) { action in
+                                    headerAction(action, group: group)
+                                }
+                            }
+
+                            LazyVGrid(columns: [GridItem(.adaptive(minimum: 230), spacing: 14)], spacing: 14) {
+                                ForEach(model.sortedGroupItems) { video in
+                                    VideoCardView(
+                                        video: video,
+                                        score: group.score(for: video.id),
+                                        evidence: group.evidence(for: video.id),
+                                        language: language,
+                                        isSelected: model.selectedMediaID == video.id,
+                                        isChecked: model.checkedMediaIDs.contains(video.id),
+                                        toggleChecked: { model.toggleChecked(video.id) }
+                                    )
+                                    .onTapGesture { handleCardTap(video) }
+                                }
                             }
                         }
+                        .padding(20)
                     }
-                    .padding(20)
+                    .frame(maxWidth: .infinity, minHeight: 1, alignment: .topLeading)
                 }
             } else {
                 ContentUnavailableView(
@@ -83,6 +87,17 @@ struct GroupDetailView: View {
             model.toggleGroupItemSelection(video.id)
         } else {
             model.selectGroupItem(video.id)
+        }
+    }
+
+    @ViewBuilder
+    private func headerAction(_ action: GroupDetailHeaderAction, group: SimilarityGroup) -> some View {
+        switch action {
+        case .highestSimilarity:
+            Text(L10n.highestSimilarity(DisplayFormatters.percent(group.maximumScore), language))
+                .font(.callout.weight(.medium))
+        case .sortMenu:
+            GroupSortMenu(model: model, language: language)
         }
     }
 }
