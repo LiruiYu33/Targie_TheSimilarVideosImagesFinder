@@ -56,4 +56,9 @@ final class SidebarControlPlacementTests: XCTestCase {
         XCTAssertEqual(L10n.clearFolders(.english), "Clear Folder Selection")
         XCTAssertEqual(L10n.clearFolders(.simplifiedChinese), "清除文件夹选择")
     }
+
+    func testSkippedFilesScrollViewReachesPopoverEdge() {
+        XCTAssertEqual(SkippedFilesPopoverLayout.scrollViewHorizontalInset, 0)
+        XCTAssertGreaterThan(SkippedFilesPopoverLayout.contentTrailingPadding, 0)
+    }
 }

@@ -192,7 +192,9 @@ struct SidebarView: View {
             }
             .buttonStyle(.plain)
             .popover(isPresented: $showSkippedFiles) {
-                SkippedFilesList(issues: model.issues, language: language)
+                SkippedFilesList(issues: model.issues, language: language) { issue in
+                    model.revealIssue(issue)
+                }
             }
         }
     }
@@ -363,11 +365,14 @@ private struct DisplayThresholdControl: View {
 struct SkippedFilesList: View {
     let issues: [ScanIssue]
     let language: AppLanguage
+    let onRevealIssue: (ScanIssue) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text(L10n.skippedFiles(issues.count, language))
                 .font(.headline)
+                .padding(.horizontal, SkippedFilesPopoverLayout.headerPadding)
+                .padding(.top, SkippedFilesPopoverLayout.headerPadding)
                 .padding(.bottom, 8)
 
             Divider()
@@ -383,19 +388,27 @@ struct SkippedFilesList: View {
                             Text(issue.message(language: language))
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
-                            Text(issue.url.deletingLastPathComponent().path)
-                                .font(.caption2)
-                                .foregroundStyle(.tertiary)
-                                .lineLimit(1)
-                                .truncationMode(.middle)
+                            Button { onRevealIssue(issue) } label: {
+                                Text(issue.url.deletingLastPathComponent().path)
+                                    .font(.caption2)
+                                    .foregroundStyle(Color.accentColor)
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                            }
+                            .buttonStyle(.plain)
+                            .help(L10n.showInFinder(language))
                         }
                         .padding(.vertical, 2)
                     }
                 }
                 .padding(.vertical, 8)
+                .padding(.leading, SkippedFilesPopoverLayout.contentLeadingPadding)
+                .padding(.trailing, SkippedFilesPopoverLayout.contentTrailingPadding)
             }
         }
-        .padding(16)
-        .frame(width: 320, height: min(CGFloat(issues.count) * 60 + 60, 400))
+        .frame(
+            width: SkippedFilesPopoverLayout.width,
+            height: SkippedFilesPopoverLayout.height(issueCount: issues.count)
+        )
     }
 }

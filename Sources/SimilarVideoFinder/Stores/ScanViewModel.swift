@@ -544,6 +544,10 @@ final class ScanViewModel: ObservableObject {
         if let media = selectedMedia { deletionService.reveal(media.url) }
     }
 
+    func revealIssue(_ issue: ScanIssue) {
+        deletionService.reveal(issue.url)
+    }
+
     func openSelectedMedia() {
         if let media = selectedMedia { deletionService.open(media.url) }
     }

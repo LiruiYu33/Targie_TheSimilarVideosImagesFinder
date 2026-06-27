@@ -131,6 +131,17 @@ final class ScanViewModelTests: XCTestCase {
         XCTAssertEqual(model.deletePrompt?.step, .choosingMethod)
     }
 
+    func testRevealIssueOpensSkippedFileLocationInFinder() {
+        let deletion = FakeDeletionService()
+        let model = ScanViewModel(deletionService: deletion)
+        let skippedURL = URL(fileURLWithPath: "/tmp/TargieSkipped/broken.mp4")
+        let issue = ScanIssue(url: skippedURL, reason: .noVideoTrack)
+
+        model.revealIssue(issue)
+
+        XCTAssertEqual(deletion.revealedURLs, [skippedURL])
+    }
+
     func testSuccessfulDeletionDropsSingletonGroup() async {
         let a = SimilarityScoringTests.video(name: "a.mov")
         let b = SimilarityScoringTests.video(name: "b.mov")
@@ -865,6 +876,7 @@ private struct ExactDuplicatePipeline: SimilarityProcessing {
 @MainActor
 private final class FakeDeletionService: DeletionServicing {
     var deletedURLs: [URL] = []
+    var revealedURLs: [URL] = []
     let failingURLs: Set<URL>
 
     init(failingURLs: Set<URL> = []) {
@@ -878,7 +890,10 @@ private final class FakeDeletionService: DeletionServicing {
         }
     }
 
-    func reveal(_ url: URL) {}
+    func reveal(_ url: URL) {
+        revealedURLs.append(url)
+    }
+
     func open(_ url: URL) {}
 }
 
