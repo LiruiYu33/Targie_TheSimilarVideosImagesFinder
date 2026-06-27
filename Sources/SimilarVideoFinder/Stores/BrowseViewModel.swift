@@ -24,7 +24,6 @@ import SwiftUI
 
 @MainActor
 final class BrowseViewModel: ObservableObject {
-
     // MARK: - Filters
 
     enum MediaFilter: String, CaseIterable, Identifiable, Sendable {
@@ -66,10 +65,10 @@ final class BrowseViewModel: ObservableObject {
     // MARK: - Published State
 
     /// Filtered and sorted items ready for display.
-    /// Explicitly published so the List reliably reorders when sort/filter changes.
+    /// Explicitly published so the table reliably reorders when sort/filter changes.
     @Published var displayedItems: [MediaItem] = []
 
-    /// Incremented on every recompute so SwiftUI List reorders rows
+    /// Incremented on every recompute so the table reorders rows
     /// when the same items appear in a different sort order.
     @Published var sortVersion: Int = 0
 

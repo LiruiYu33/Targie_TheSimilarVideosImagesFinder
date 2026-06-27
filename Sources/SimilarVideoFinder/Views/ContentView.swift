@@ -27,7 +27,7 @@ struct ContentView: View {
     @AppStorage("scanMode") private var scanModeRawValue = ScanMode.all.rawValue
 
     @State private var appMode: AppMode = .scan
-    @State private var browseModel: BrowseViewModel?
+    @StateObject private var browseSession = BrowseSessionCoordinator()
 
     private var language: AppLanguage {
         AppLanguage(rawValue: languageRawValue) ?? .defaultLanguage
@@ -39,7 +39,7 @@ struct ContentView: View {
             case .scan:
                 scanView
             case .browse:
-                if let browseModel {
+                if let browseModel = browseSession.browseModel {
                     BrowseView(browseModel: browseModel, onBack: exitBrowseMode)
                         .sheet(item: $model.deletePrompt) { _ in
                             DeleteConfirmationView(model: model)
@@ -59,7 +59,18 @@ struct ContentView: View {
             model.addFolders(urls)
         }
         .environment(\.appLanguage, language)
-        .onAppear { model.setScanMode(ScanMode(rawValue: scanModeRawValue) ?? .all) }
+        .onAppear {
+            model.setScanMode(ScanMode(rawValue: scanModeRawValue) ?? .all)
+            browseSession.prepareIfPossible(scanModel: model)
+        }
+        .onChange(of: model.items.count) { _, _ in
+            browseSession.prepareIfPossible(scanModel: model)
+        }
+        .onChange(of: model.progress.stage) { _, stage in
+            if stage == .completed {
+                browseSession.prepareIfPossible(scanModel: model)
+            }
+        }
         .background(
             // In scan mode this owns the window title; browse mode installs
             // its own dynamic WindowTitleUpdater that reflects item count.
@@ -161,14 +172,13 @@ struct ContentView: View {
         if !model.hasDiscoveredItems {
             model.discoverFiles()
         }
-        let bm = BrowseViewModel(scanModel: model)
-        browseModel = bm
+        _ = browseSession.model(for: model)
         appMode = .browse
     }
 
     private func exitBrowseMode() {
         appMode = .scan
-        browseModel = nil
+        browseSession.leaveBrowseMode()
     }
 }
 
